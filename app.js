@@ -1,0 +1,628 @@
+(() => {
+  const STORAGE_PREFIX = 'enotifier_';
+  const LS = {
+    key(k){ return STORAGE_PREFIX + k; },
+    get(k){ try { return JSON.parse(localStorage.getItem(this.key(k))); } catch(e){ return null; } },
+    set(k,v){ localStorage.setItem(this.key(k), JSON.stringify(v)); },
+    remove(k){ localStorage.removeItem(this.key(k)); }
+  };
+
+  // --- Utilities ---
+  const qs = (s, r=document) => r.querySelector(s);
+  const qsa = (s, r=document) => Array.from(r.querySelectorAll(s));
+  const uid = () => 'id_' + Date.now() + '_' + Math.floor(Math.random()*9999);
+  const escapeHtml = s => String(s||'').replace(/[&<>"']/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
+  function toast(msg, type='info', t=3500){
+    const box = document.createElement('div');
+    box.className = 'toast ' + type;
+    box.textContent = msg;
+    Object.assign(box.style, {padding:'10px 14px', borderRadius:'8px', color:'#fff', marginTop:'8px', fontWeight:700, zIndex:9999});
+    if(type==='success') box.style.background = 'linear-gradient(135deg,#2bb673,#1f8f5a)';
+    if(type==='error') box.style.background = 'linear-gradient(135deg,#e05b5b,#b13232)';
+    if(type==='info') box.style.background = 'linear-gradient(135deg,#4d4da9,#6a42f4)';
+    document.getElementById('toasts').appendChild(box);
+    setTimeout(()=> box.remove(), t);
+  }
+
+  // --- Seed / storage helpers ---
+  function seedIfEmpty(){
+    if(!LS.get('users')) LS.set('users', [{ id:'u_demo', ntid:'demo', displayName:'demo', email:'demo@Bosch.in' }]);
+    if(!LS.get('events')) LS.set('events', []);
+    if(!LS.get('subscriptions')) LS.set('subscriptions', []);
+  }
+  function getEvents(){ return LS.get('events') || []; }
+  function saveEvents(arr){ LS.set('events', arr); }
+  function getSubs(){ return LS.get('subscriptions') || []; }
+  function saveSubs(arr){ LS.set('subscriptions', arr); }
+
+  // --- Session & auth (NTID only) ---
+  let currentUser = null;
+  function setSession(u){ LS.set('session', u); currentUser = u; }
+  function clearSession(){ LS.remove('session'); localStorage.removeItem(LS.key('remember_ntid')); currentUser = null; }
+  function loadSession(){
+    const s = LS.get('session');
+    if(s){
+      const users = LS.get('users') || [];
+      const u = users.find(x => x.id === s.id);
+      if(u) currentUser = { id:u.id, ntid:u.ntid, email:u.email, displayName:u.displayName };
+    }
+  }
+
+  // --- Date & status utilities ---
+  function todayISO(){ return (new Date()).toISOString().slice(0,10); }
+  function computeStatus(ev){
+    const now = new Date();
+    const start = ev.startDate ? new Date(ev.startDate + 'T00:00:00') : null;
+    const end = ev.endDate ? new Date(ev.endDate + 'T00:00:00') : null;
+    if(end && end < new Date(now.getFullYear(), now.getMonth(), now.getDate())) return 'expired';
+    if(start && end && start <= now && now <= new Date(end.getFullYear(), end.getMonth(), end.getDate()+1)) return 'ongoing';
+    if(start && start <= now && (!end || end >= now)) return 'ongoing';
+    return 'upcoming';
+  }
+
+  // --- Dashboard render (counts, lists) ---
+  function renderDashboardCounts(){
+    const events = getEvents();
+    const myEvents = currentUser ? events.filter(e => e.ownerId === currentUser.id) : [];
+    const published = myEvents.filter(e => e.published && !e.draft);
+    const subs = getSubs().filter(s => s.userId === (currentUser && currentUser.id));
+    const renewals = events.filter(e => e.renewalEnabled && e.published && e.endDate).filter(e => {
+      const end = new Date(e.endDate + 'T00:00:00'); const now = new Date();
+      const diffDays = Math.ceil((end - now)/(1000*60*60*24)); return diffDays <= 7 && diffDays >= 0;
+    });
+
+    if(qs('#stat-total-events')) qs('#stat-total-events').textContent = events.length;
+    if(qs('#stat-active-subs')) qs('#stat-active-subs').textContent = subs.length;
+    if(qs('#stat-renewals')) qs('#stat-renewals').textContent = renewals.length;
+    if(qs('#hero-active-events')) qs('#hero-active-events').textContent = published.length;
+    if(qs('#hero-subscribed-events')) qs('#hero-subscribed-events').textContent = subs.length;
+
+    // Upcoming renewals list
+    const ur = qs('#upcoming-renewals');
+    if(ur){
+      ur.innerHTML = '';
+      const ulist = events.filter(e => e.renewalEnabled && e.published && e.endDate).filter(e => {
+        const end = new Date(e.endDate + 'T00:00:00'); const now = new Date();
+        const diffDays = Math.ceil((end - now)/(1000*60*60*24)); return diffDays <= 7 && diffDays >= 0;
+      }).slice(0,4);
+      if(!ulist.length) ur.innerHTML = '<div class="empty-state">No renewals soon</div>';
+      else ulist.forEach(e => {
+        const end = new Date(e.endDate + 'T00:00:00'); const diffDays = Math.ceil((end - new Date())/(1000*60*60*24));
+        const div = document.createElement('div');
+        div.className = 'list-item accent-left soon';
+        div.innerHTML = `<div class="list-left"><div class="item-title">${escapeHtml(e.name)}</div><div class="item-sub">Expires in ${diffDays} day(s)</div></div><div class="list-right"><div class="badge badge-soon">Renewal</div></div>`;
+        ur.appendChild(div);
+      });
+    }
+
+    // Recent subscriptions list
+    const rs = qs('#recent-subs');
+    if(rs){
+      rs.innerHTML = '';
+      const recentSubs = getSubs().filter(s => s.userId === (currentUser && currentUser.id)).slice(-4).reverse();
+      if(!recentSubs.length) rs.innerHTML = '<div class="empty-state">No recent subscriptions</div>';
+      else recentSubs.forEach(s => {
+        const ev = getEvents().find(e => e.id === s.eventId);
+        const div = document.createElement('div');
+        div.className = 'list-item';
+        div.innerHTML = `<div class="list-left"><div class="item-title">${escapeHtml(ev?ev.name:'(deleted)')}</div><div class="item-sub">${escapeHtml(ev?ev.startDate:'')}</div></div><div class="list-right"><div class="badge badge-active">${escapeHtml(ev?ev.status||'Active':'Unknown')}</div></div>`;
+        rs.appendChild(div);
+      });
+    }
+  }
+
+  // --- My Events rendering with Active / Drafts / Expired ---
+  function renderOwnerEventsTabs(){
+    const container = qs('#owner-events');
+    if(!container) return;
+    // sync status and save
+    const all = getEvents();
+    all.forEach(e => { e.status = computeStatus(e); });
+    saveEvents(all);
+
+    const events = all.filter(e => e.ownerId === currentUser.id);
+    const active = events.filter(e => !e.draft && e.published && e.status !== 'expired');
+    const drafts = events.filter(e => e.draft || (!e.published && !e.draft));
+    const expired = events.filter(e => e.status === 'expired');
+
+    const html = `
+      <div class="tab-panel active" id="panel-active">
+        ${active.length ? active.map(ev => ownerEventRowHtml(ev)).join('') : '<div class="empty-state">No active events</div>'}
+      </div>
+      <div class="tab-panel" id="panel-drafts">
+        ${drafts.length ? drafts.map(ev => ownerEventRowHtml(ev)).join('') : '<div class="empty-state">No drafts</div>'}
+      </div>
+      <div class="tab-panel" id="panel-expired">
+        ${expired.length ? expired.map(ev => ownerEventRowHtml(ev)).join('') : '<div class="empty-state">No expired events</div>'}
+      </div>
+    `;
+    container.innerHTML = html;
+    renderDashboardCounts();
+  }
+
+  function ownerEventRowHtml(ev){
+    const subs = (ev.subscriberIds||[]).length;
+    const statusClass = ev.status === 'expired' ? 'status-expired' : (ev.status === 'ongoing' ? 'status-warning' : 'status-active');
+    const publishLabel = ev.published ? 'Unpublish' : 'Publish';
+    return `
+      <div class="events-row" data-id="${ev.id}">
+        <div class="col name">${escapeHtml(ev.name)}</div>
+        <div class="col start">${escapeHtml(ev.startDate || '-')}</div>
+        <div class="col end">${escapeHtml(ev.endDate || '-')}</div>
+        <div class="col status"><span class="status-badge ${statusClass}">${escapeHtml(ev.status||'Active')}</span></div>
+        <div class="col subs">${subs}</div>
+        <div class="col actions">
+          <button class="btn btn-outline btn-sm" data-action="edit">Edit</button>
+          <button class="btn btn-primary btn-sm" data-action="publish">${publishLabel}</button>
+          <button class="btn btn-danger btn-sm" data-action="delete">Delete</button>
+        </div>
+      </div>
+    `;
+  }
+
+  // delegation for owner events (single attach)
+  function initOwnerEventsDelegation(){
+    const container = qs('#owner-events');
+    if(!container) return;
+    // ensure we attach only once by using a data attribute guard
+    if(container._eventsDelegationAttached) return;
+    container._eventsDelegationAttached = true;
+
+    container.addEventListener('click', (ev) => {
+      const btn = ev.target.closest('button[data-action]');
+      if(!btn) return;
+      const row = btn.closest('.events-row');
+      if(!row) return;
+      const id = row.dataset.id;
+      const action = btn.dataset.action;
+      if(action === 'delete') handleDeleteEvent(id);
+      else if(action === 'edit') handleEditEvent(id);
+      else if(action === 'publish') handleTogglePublish(id);
+    });
+  }
+
+  function handleDeleteEvent(id){
+    if(!confirm('Delete this event?')) return;
+    let events = getEvents().filter(e => e.id !== id);
+    saveEvents(events);
+    let subs = getSubs().filter(s => s.eventId !== id);
+    saveSubs(subs);
+    toast('Event deleted', 'success');
+    renderOwnerEventsTabs();
+    reloadBrowse(true);
+    renderDashboardCounts();
+    loadMySubscriptions();
+  }
+
+  function handleEditEvent(id){
+    const ev = getEvents().find(x => x.id === id && x.ownerId === currentUser.id);
+    if(!ev) { toast('Event not found or unauthorized', 'error'); return; }
+    showSection('create-event');
+    qs('#event-name').value = ev.name || '';
+    qs('#description').value = ev.description || '';
+    qs('#start-date').value = ev.startDate || '';
+    qs('#end-date').value = ev.endDate || '';
+    qs('#location').value = ev.location || '';
+    qs('#contact-email').value = ev.contactEmail || `${currentUser.ntid}@Bosch.in`;
+    qs('#tags').value = (ev.tags || []).join(',');
+    qs('#renewal').checked = !!ev.renewalEnabled;
+    const vis = ev.visibility || 'private';
+    const r = qs(`[name="visibility"][value="${vis}"]`);
+    if(r) r.checked = true;
+    sessionStorage.setItem('editing_event', id);
+    toast('Editing event — update & publish when ready', 'info', 2500);
+  }
+
+  function handleTogglePublish(id){
+    let events = getEvents();
+    const idx = events.findIndex(e => e.id === id && e.ownerId === currentUser.id);
+    if(idx === -1) { toast('Not found or unauthorized', 'error'); return; }
+    events[idx].published = !events[idx].published;
+    events[idx].draft = !events[idx].published;
+    events[idx].status = computeStatus(events[idx]);
+    if(events[idx].published) events[idx]._lastPublishedAt = new Date().toISOString();
+    saveEvents(events);
+    toast(events[idx].published ? 'Published' : 'Unpublished', 'success');
+    renderOwnerEventsTabs();
+    reloadBrowse(true);
+    renderDashboardCounts();
+  }
+
+  // --- Create form (guarded attach to avoid duplicates) ---
+  function initCreateEventForm(){
+    const form = qs('#create-event-form');
+    if(!form) return;
+    if(form._createAttached) return; // guard
+    form._createAttached = true;
+
+    const saveDraftBtn = qs('#save-draft');
+
+    // validation helper (returns first invalid field or null)
+    function validateFormFields(){
+      const reqs = [
+        { sel: '#event-name', msg: 'Event name' },
+        { sel: '#description', msg: 'Description' },
+        { sel: '#start-date', msg: 'Start date' },
+        { sel: '#end-date', msg: 'End date' },
+        { sel: '#location', msg: 'Location' },
+        { sel: '#contact-email', msg: 'Contact email' }
+      ];
+      for(const r of reqs){
+        const el = qs(r.sel);
+        if(!el) return { ok:false, field:null, msg:`Missing field ${r.sel}` };
+        if(String(el.value || '').trim() === '') return { ok:false, field:el, msg:`${r.msg} is required` };
+      }
+      // simple email pattern
+      const email = qs('#contact-email').value.trim();
+      const emailRe = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+      if(!emailRe.test(email)) return { ok:false, field: qs('#contact-email'), msg:'Enter a valid contact email' };
+      // dates sanity: start <= end
+      const s = qs('#start-date').value; const e = qs('#end-date').value;
+      if(s && e && new Date(s) > new Date(e)) return { ok:false, field: qs('#start-date'), msg:'Start date cannot be after end date' };
+      return { ok:true, field:null };
+    }
+
+    saveDraftBtn.addEventListener('click', (ev) => {
+      ev.preventDefault();
+      const payload = gatherFormData();
+      const editing = sessionStorage.getItem('editing_event');
+      let events = getEvents();
+      if(editing){
+        const idx = events.findIndex(x => x.id === editing && x.ownerId === currentUser.id);
+        if(idx !== -1){
+          events[idx] = { ...events[idx], ...payload, draft:true, published:false, status: computeStatus(payload) };
+          saveEvents(events);
+          sessionStorage.removeItem('editing_event');
+          toast('Draft updated', 'success');
+          renderOwnerEventsTabs();
+          renderDashboardCounts();
+          reloadBrowse(true);
+          showSection('my-event');
+          form.reset();
+          qs('#contact-email').value = `${currentUser.ntid}@Bosch.in`;
+          return;
+        }
+      }
+      // new draft
+      const id = uid();
+      events.push({ id, ownerId: currentUser.id, ...payload, draft:true, published:false, subscriberIds:[], createdAt: new Date().toISOString(), status: computeStatus(payload) });
+      saveEvents(events);
+      toast('Draft saved', 'success');
+      renderOwnerEventsTabs();
+      renderDashboardCounts();
+      showSection('my-event');
+      form.reset();
+      qs('#contact-email').value = `${currentUser.ntid}@Bosch.in`;
+    });
+
+    form.addEventListener('submit', (ev) => {
+      ev.preventDefault();
+      // VALIDATE
+      const v = validateFormFields();
+      if(!v.ok){
+        toast(v.msg, 'error', 4000);
+        if(v.field) v.field.focus();
+        return;
+      }
+
+      const payload = gatherFormData();
+      let events = getEvents();
+      const editing = sessionStorage.getItem('editing_event');
+      if(editing){
+        const idx = events.findIndex(x => x.id === editing && x.ownerId === currentUser.id);
+        if(idx !== -1){
+          events[idx] = { ...events[idx], ...payload, published:true, draft:false, status: computeStatus(payload), _lastPublishedAt: new Date().toISOString() };
+          saveEvents(events);
+          sessionStorage.removeItem('editing_event');
+          toast('Event updated & published', 'success');
+          // STAY on Create Event page as requested:
+          form.reset();
+          qs('#contact-email').value = `${currentUser.ntid}@Bosch.in`;
+          // update UI lists
+          renderOwnerEventsTabs();
+          renderDashboardCounts();
+          reloadBrowse(true);
+          return;
+        } else {
+          toast('Update failed', 'error');
+          return;
+        }
+      } else {
+        // create new published event
+        const id = uid();
+        events.push({ id, ownerId: currentUser.id, ...payload, published:true, draft:false, subscriberIds:[], createdAt: new Date().toISOString(), status: computeStatus(payload), _lastPublishedAt: new Date().toISOString() });
+        saveEvents(events);
+        toast('Event published', 'success');
+        // STAY on Create Event page: reset form and keep contact email filled
+        form.reset();
+        qs('#contact-email').value = `${currentUser.ntid}@Bosch.in`;
+        renderOwnerEventsTabs();
+        renderDashboardCounts();
+        reloadBrowse(true);
+        return;
+      }
+    });
+  }
+
+  function gatherFormData(){
+    return {
+      name: qs('#event-name').value.trim(),
+      description: qs('#description').value.trim(),
+      startDate: qs('#start-date').value || '',
+      endDate: qs('#end-date').value || '',
+      location: qs('#location').value.trim(),
+      contactEmail: qs('#contact-email').value.trim() || `${currentUser.ntid}@Bosch.in`,
+      tags: (qs('#tags').value || '').split(',').map(s => s.trim()).filter(Boolean),
+      renewalEnabled: !!qs('#renewal').checked,
+      visibility: (qs('[name="visibility"]:checked')||{}).value || 'private'
+    };
+  }
+
+  // --- Browse / subscribe (same as before) ---
+  let browsePage = 1;
+  const pageSize = 6;
+  const loadMoreSize = 5;
+  function reloadBrowse(reset=true){
+    if(reset) { browsePage = 1; qs('#events-grid').innerHTML = ''; }
+    const q = qs('#searchInput').value.trim().toLowerCase();
+    const category = qs('#categoryFilter').value;
+    const status = qs('#statusFilter').value;
+    const dateFrom = qs('#dateFrom').value;
+    const dateTo = qs('#dateTo').value;
+
+    let items = getEvents().filter(e => e.published && !e.draft);
+    if(q) items = items.filter(e => (e.name + ' ' + e.description + ' ' + (e.tags||[]).join(' ')).toLowerCase().includes(q));
+    if(category !== 'all') items = items.filter(e => (e.tags||[]).includes(category));
+    if(status !== 'all') items = items.filter(e => e.status === status);
+    if(dateFrom) items = items.filter(e => e.startDate >= dateFrom);
+    if(dateTo) items = items.filter(e => e.endDate <= dateTo);
+
+    const start = (browsePage-1)*pageSize;
+    let limit = (browsePage === 1) ? pageSize : loadMoreSize;
+    const pageItems = items.slice(start, start + limit);
+    renderBrowse(pageItems, reset);
+  }
+
+  function renderBrowse(items, reset=true){
+    const grid = qs('#events-grid');
+    if(reset) grid.innerHTML = '';
+    if(!items || items.length===0){
+      if(reset) grid.innerHTML = '<div class="empty-state">No events found. Try changing filters.</div>';
+      return;
+    }
+    items.forEach(ev => {
+      const card = document.createElement('article');
+      card.className = 'event-card';
+      card.innerHTML = `
+        <h3 class="event-title">${escapeHtml(ev.name)}</h3>
+        <div class="event-date">${escapeHtml(ev.startDate || '-')}</div>
+        <div class="event-desc">${escapeHtml(ev.description || '')}</div>
+        <div class="event-meta">${(ev.tags||[]).map(t => `<span class="tag">${escapeHtml(t)}</span>`).join('')}</div>
+        <div class="event-actions">
+          <button class="subscribe-btn" data-id="${ev.id}">${isSubscribed(ev.id)?'Subscribed':'Subscribe'}</button>
+        </div>
+      `;
+      grid.appendChild(card);
+    });
+  }
+
+  function isSubscribed(eventId){
+    return (getSubs() || []).some(s => s.eventId === eventId && s.userId === currentUser.id);
+  }
+
+  function toggleSubscribe(eventId){
+    let subs = getSubs();
+    const exists = subs.find(s => s.eventId===eventId && s.userId===currentUser.id);
+    if(exists){
+      subs = subs.filter(s => !(s.eventId===eventId && s.userId===currentUser.id));
+      const events = getEvents(); const ev = events.find(x => x.id === eventId);
+      if(ev) ev.subscriberIds = (ev.subscriberIds||[]).filter(id => id !== currentUser.id);
+      saveEvents(events); saveSubs(subs); toast('Unsubscribed', 'info');
+    } else {
+      subs.push({ id: uid(), userId: currentUser.id, eventId, autoRenew: true });
+      const events = getEvents(); const ev = events.find(x => x.id === eventId);
+      if(ev) ev.subscriberIds = ev.subscriberIds || [], ev.subscriberIds.push(currentUser.id);
+      saveEvents(events); saveSubs(subs); toast('Subscribed', 'success');
+    }
+    renderOwnerEventsTabs(); loadMySubscriptions(); reloadBrowse(true);
+  }
+
+  // --- My subscriptions ---
+  function loadMySubscriptions(){
+    const container = qs('#subscription-list');
+    if(!container) return;
+    const subs = getSubs().filter(s => s.userId === currentUser.id);
+    if(subs.length === 0){ container.innerHTML = '<div class="empty-state">No subscriptions yet.</div>'; return; }
+    const rows = subs.map(s => {
+      const ev = getEvents().find(e => e.id === s.eventId) || { name:'(deleted)', endDate:'-', status:'expired' };
+      const statusClass = ev.status==='expired' ? 'status-expired' : (ev.status==='upcoming' ? 'status-warning' : 'status-active');
+      return `<div class="subs-row" data-id="${s.id}" data-eventid="${ev.id}">
+        <div class="col event-name">${escapeHtml(ev.name)}</div>
+        <div class="col renewal">${escapeHtml(ev.endDate||'-')}</div>
+        <div class="col status"><span class="status-badge ${statusClass}">${escapeHtml(ev.status||'Active')}</span></div>
+        <div class="col autorenew">${s.autoRenew? 'Yes':'No'}</div>
+        <div class="col actions"><button class="btn btn-outline btn-sm unsub-btn" data-eventid="${ev.id}">Unsubscribe</button></div>
+      </div>`;
+    }).join('');
+    container.innerHTML = rows;
+
+    container.querySelectorAll('.unsub-btn').forEach(b => {
+      b.addEventListener('click', () => {
+        if(!confirm('Unsubscribe?')) return;
+        const evId = b.dataset.eventid;
+        let subs = getSubs().filter(s => !(s.eventId === evId && s.userId === currentUser.id));
+        saveSubs(subs);
+        const evs = getEvents();
+        const ev = evs.find(x => x.id === evId);
+        if(ev) ev.subscriberIds = (ev.subscriberIds||[]).filter(id => id !== currentUser.id);
+        saveEvents(evs);
+        toast('Unsubscribed', 'info');
+        loadMySubscriptions(); renderOwnerEventsTabs(); renderDashboardCounts();
+      });
+    });
+  }
+
+  // --- Navigation and helpers ---
+  function wireNav(){
+    qsa('.nav-links a').forEach(a => a.addEventListener('click', (e) => { e.preventDefault(); showSection(a.dataset.target); }));
+    qsa('.create-btn').forEach(b => b.addEventListener('click', ()=> showSection('create-event')));
+    const profile = qs('#profile-btn');
+    if(profile) profile.addEventListener('click', ()=> { if(confirm('Logout?')) { logoutFlow(); } });
+  }
+
+  // showSection ensures dashboard scrolls to top
+  function showSection(id){
+    qsa('section').forEach(s => s.classList.remove('active'));
+    const sec = qs('#' + id);
+    if(sec) sec.classList.add('active');
+    qsa('.nav-links a').forEach(a => a.classList.toggle('active', a.dataset.target === id));
+    setTimeout(()=> {
+      if(id === 'dashboard'){
+        // scroll dashboard to top (both window and main container)
+        window.scrollTo({ top: 0, behavior: 'instant' });
+        const main = document.querySelector('main');
+        if(main && typeof main.scrollTo === 'function') main.scrollTo({ top: 0 });
+      } else {
+        sec && sec.focus();
+      }
+    }, 60);
+    if(id === 'my-event') {
+      // ensure My Events tabs render and default to Active
+      qsa('.my-tab').forEach(btn => {
+        btn.classList.toggle('active', btn.dataset.tab === 'tab-active');
+        btn.setAttribute('aria-selected', btn.dataset.tab === 'tab-active' ? 'true' : 'false');
+      });
+      renderOwnerEventsTabs();
+    }
+  }
+
+  function wireMyEventTabs(){
+    qsa('.my-tab').forEach(btn => btn.addEventListener('click', () => {
+      qsa('.my-tab').forEach(b => { b.classList.remove('active'); b.setAttribute('aria-selected','false'); });
+      btn.classList.add('active'); btn.setAttribute('aria-selected','true');
+      const which = btn.dataset.tab;
+      const panelActive = qs('#panel-active'); const panelDrafts = qs('#panel-drafts'); const panelExpired = qs('#panel-expired');
+      if(!panelActive || !panelDrafts || !panelExpired) return;
+      panelActive.classList.toggle('active', which === 'tab-active');
+      panelDrafts.classList.toggle('active', which === 'tab-drafts');
+      panelExpired.classList.toggle('active', which === 'tab-expired');
+    }));
+  }
+
+  // --- Login flow ---
+  function loginWithNTID(ntid, remember=false){
+    if(!ntid) { toast('Enter NTID', 'error'); return; }
+    let users = LS.get('users') || [];
+    let user = users.find(u => u.ntid.toLowerCase() === ntid.toLowerCase());
+    if(!user){
+      user = { id: 'u_' + ntid.toLowerCase(), ntid, displayName: ntid, email: `${ntid}@Bosch.in` };
+      users.push(user); LS.set('users', users);
+    }
+    setSession({ id: user.id, ntid: user.ntid, email: user.email, displayName: user.displayName });
+    if(remember) localStorage.setItem(LS.key('remember_ntid'), user.ntid);
+
+    document.getElementById('login-page').style.display = 'none';
+    document.getElementById('main-website').style.display = 'block';
+    document.body.classList.remove('login-active');
+    qs('#user-greeting').textContent = user.ntid;
+    qs('#contact-email').value = `${user.ntid}@Bosch.in`;
+     //redirect to dashboard by default 
+    showSection('dashboard');
+    window.scrollTo({ top: 0, behavior: 'instant' });
+
+
+    // init UI
+    renderDashboardCounts(); renderOwnerEventsTabs(); initCreateEventForm(); initOwnerEventsDelegation(); wireMyEventTabs(); loadMySubscriptions(); reloadBrowse(true);
+    toast(`Welcome ${user.ntid}`, 'success', 1600);
+  }
+
+  function logoutFlow(){
+    clearSession();
+    document.getElementById('login-page').style.display = 'flex';
+    document.getElementById('main-website').style.display = 'none';
+    document.body.classList.add('login-active');
+  }
+
+  // --- Boot/Wiring ---
+  function initBrowseHandlers(){
+    const s = qs('#searchInput'); if(s) s.addEventListener('input', debounce(()=> reloadBrowse(true), 300));
+    const cat = qs('#categoryFilter'); if(cat) cat.addEventListener('change', ()=> reloadBrowse(true));
+    const st = qs('#statusFilter'); if(st) st.addEventListener('change', ()=> reloadBrowse(true));
+    const df = qs('#dateFrom'); if(df) df.addEventListener('change', ()=> reloadBrowse(true));
+    const dt = qs('#dateTo'); if(dt) dt.addEventListener('change', ()=> reloadBrowse(true));
+    const clear = qs('#clearFilters'); if(clear) clear.addEventListener('click', ()=> { qs('#searchInput').value=''; qs('#categoryFilter').value='all'; qs('#statusFilter').value='all'; qs('#dateFrom').value=''; qs('#dateTo').value=''; reloadBrowse(true); });
+    const loadMore = qs('#loadMore'); if(loadMore) loadMore.addEventListener('click', ()=> { browsePage++; reloadBrowse(false); });
+    const grid = qs('#events-grid'); if(grid) grid.addEventListener('click', (e) => { const btn = e.target.closest('.subscribe-btn'); if(!btn) return; toggleSubscribe(btn.dataset.id); btn.textContent = isSubscribed(btn.dataset.id) ? 'Subscribed' : 'Subscribe'; });
+  }
+  function debounce(fn, t=200){ let to=null; return (...a)=>{ clearTimeout(to); to=setTimeout(()=>fn(...a), t); }; }
+
+  function boot(){
+    seedIfEmpty();
+    loadSession();
+
+    // if remembered NTID -> auto login
+    const rem = localStorage.getItem(LS.key('remember_ntid'));
+    if(rem && !currentUser) loginWithNTID(rem, true);
+    else if(currentUser){
+      document.getElementById('login-page').style.display = 'none';
+      document.getElementById('main-website').style.display = 'block';
+      document.body.classList.remove('login-active');
+      qs('#user-greeting').textContent = currentUser.ntid;
+      qs('#contact-email').value = `${currentUser.ntid}@Bosch.in`;
+      renderDashboardCounts(); renderOwnerEventsTabs(); initCreateEventForm(); initOwnerEventsDelegation(); wireMyEventTabs(); loadMySubscriptions(); reloadBrowse(true);
+    }
+
+    // login button
+    const loginBtn = qs('#login-btn');
+    if(loginBtn) loginBtn.addEventListener('click', (e)=> { e.preventDefault(); const ntid = qs('#ntid').value.trim(); const remember = !!qs('#remember').checked; if(!ntid) return toast('Please enter NTID', 'error'); loginWithNTID(ntid, remember); });
+
+    wireNav();
+    initBrowseHandlers();
+    // ensure create form handlers are attached (guarded inside)
+    initCreateEventForm();
+    initOwnerEventsDelegation();
+    wireMyEventTabs();
+  }
+
+  // Correct view-all routing
+qsa('.panel-header .view-all').forEach(v => {
+  v.addEventListener('click', e => {
+    e.preventDefault();
+    const type = v.dataset.open;
+
+    if (type === 'renewals') {
+      showSection('my-event');   // Upcoming Renewals → My Event
+    }
+
+    if (type === 'recent-subs') {
+      showSection('my-subscription');  // Recent Subscriptions → My Subscription
+    }
+  });
+});
+
+// Profile dropdown toggle
+const pd = qs('#profile-dropdown');
+const pb = qs('#profile-btn');
+
+pb.addEventListener('click', (e)=>{
+  e.stopPropagation();
+  pd.classList.toggle('hidden');
+  if(currentUser) qs('#pd-ntid').textContent = currentUser.ntid + "@Bosch.com";
+});
+
+// Hide when clicking outside
+document.addEventListener('click', ()=> pd.classList.add('hidden'));
+
+// Logout
+qs('.logout-btn').addEventListener('click', ()=>{
+  if(confirm("Are you sure you want to logout?")){
+    logoutFlow();
+  }
+});
+
+  document.addEventListener('DOMContentLoaded', boot);
+
+  // Expose for debug
+  window.EN = { getEvents, saveEvents, getSubs, saveSubs, uid };
+
+})();

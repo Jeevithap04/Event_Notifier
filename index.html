@@ -1,0 +1,293 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Event Notifier — Internal</title>
+
+  <!-- Keep using your existing, full stylesheet (do not replace unless you want changes) -->
+  <!-- Path to the CSS file you uploaded: /mnt/data/style.css -->
+  <link rel="stylesheet" href="style.css">
+
+  <!-- small inline helper styles for toast (optional if already present in style.css) -->
+  <style>
+    /* small toasts override to ensure visibility */
+    .toast { transition: transform .18s ease, opacity .18s ease; margin-top:8px; }
+    .toast.success { background: linear-gradient(135deg,#2bb673,#1f8f5a); color:#fff; }
+    .toast.error { background: linear-gradient(135deg,#e05b5b,#b13232); color:#fff; }
+    .toast.info { background: linear-gradient(135deg,#4d4da9,#6a42f4); color:#fff; }
+  </style>
+</head>
+<body class="login-active">
+
+  <!-- fixed supergraphic (your file) -->
+  <header class="site-header" aria-hidden="true">
+    <img src="assets/Bosch-Supergraphic_RGB.svg" alt="" class="supergraphic-strip-img">
+  </header>
+
+  <!-- LOGIN PAGE -->
+  <div id="login-page">
+    <div id="login-left">
+      <div class="bosch-badge1" aria-hidden="true">
+        <img src="assets/Bosch_symbol_logo_black_red_EN (1).svg">
+      </div>
+
+      <div class="login-title">Event Notifier</div>
+      <div class="login-subtitle">Secure event creation & reminders</div>
+      <div class="divider"></div>
+
+      <div class="login-box" role="region" aria-labelledby="login-heading">
+        <label id="login-heading">Sign in with your NTID</label>
+
+        <!-- NTID only (no password) -->
+        <label for="ntid">NTID :</label>
+        <input type="text" id="ntid" placeholder="Enter Your NTID" autocomplete="username" />
+
+        <div class="checkbox-group">
+          <input type="checkbox" id="remember">
+          <label for="remember">Remember ID on this device</label>
+        </div>
+
+        <button class="login-btn" id="login-btn">Continue</button>
+        <a href="#" class="privacy-link">Privacy Policy</a>
+      </div>
+    </div>
+
+    <div id="login-right">
+      <img src="assets/Boy_login.svg" alt="Login Illustration">
+    </div>
+  </div>
+
+  <!-- MAIN WEBSITE (hidden until login) -->
+  <div id="main-website" style="display:none;">
+    <div class="heading-section">
+      <h1>Event Notifier</h1>
+      <p>Secure event creation & reminders</p>
+      <div class="bosch-badge" aria-hidden="true">
+        <img src="assets/Bosch_symbol_logo_black_red_EN (1).svg" alt="Bosch">
+      </div>
+    </div>
+
+    <nav aria-label="Main navigation">
+      <div class="nav-links" role="navigation">
+        <a href="#" data-target="dashboard" class="active">Dashboard</a>
+        <a href="#" data-target="create-event">Create Event</a>
+        <a href="#" data-target="browse-event">Browse Event</a>
+        <a href="#" data-target="my-event">My Event</a>
+        <a href="#" data-target="my-subscription">My Subscription</a>
+      </div>
+
+      <div class="nav-icons">
+        <button id="notif-btn" title="Notifications" aria-label="Notifications">🔔</button>
+        <button id="profile-btn" title="Profile" aria-label="Profile">👤</button>
+        <div id="profile-dropdown" class="profile-drop hidden">
+        <div class="pd-row" id="pd-ntid"></div>
+        <button class="pd-row logout-btn">Logout</button>
+        </div>
+
+      </div>
+    </nav>
+
+    <main>
+      <!-- DASHBOARD -->
+      <section id="dashboard" class="active dashboard-page" tabindex="-1">
+        <div class="dashboard-hero">
+          <div class="hero-left">
+            <h2>Good morning, <span id="user-greeting">Guest</span>!</h2>
+            <p>You have <strong id="hero-active-events">0</strong> active events and <strong id="hero-subscribed-events">0</strong> subscribed events.</p>
+          </div>
+          <div class="hero-right">
+            <button class="btn btn-primary small create-btn">+ Create New Event</button>
+          </div>
+        </div>
+
+        <div class="stats-grid compact">
+          <div class="stat-card">
+            <div class="stat-icon-circle">📅</div>
+            <div class="stat-content">
+              <div class="stat-value" id="stat-total-events">0</div>
+              <div class="stat-label">Total Events</div>
+            </div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-icon-circle">🔔</div>
+            <div class="stat-content">
+              <div class="stat-value" id="stat-active-subs">0</div>
+              <div class="stat-label">Active Subscriptions</div>
+            </div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-icon-circle">⚠️</div>
+            <div class="stat-content">
+              <div class="stat-value" id="stat-renewals">0</div>
+              <div class="stat-label">Renewals Due Soon</div>
+            </div>
+          </div>
+        </div>
+
+        <div class="panel-grid stacked">
+          <div class="panel">
+            <div class="panel-header">
+              <h3>Upcoming Renewals</h3>
+              <a href="#" class="view-all" data-open="renewals">View all</a>
+            </div>
+            <div id="upcoming-renewals" class="list"></div>
+          </div>
+
+          <div class="panel">
+            <div class="panel-header">
+              <h3>Recent Subscriptions</h3>
+              <a href="#" class="view-all" data-open="recent-subs">View all</a>
+            </div>
+            <div id="recent-subs" class="list"></div>
+          </div>
+        </div>
+      </section>
+
+      <!-- CREATE EVENT -->
+      <section id="create-event" class="centered" aria-labelledby="create-event-heading">
+        <div class="card form-card" role="region" aria-live="polite">
+          <form id="create-event-form" novalidate>
+            <div class="form-row">
+              <label for="event-name">Event Name</label>
+              <input id="event-name" name="eventName" type="text" placeholder="Enter event name" required />
+            </div>
+
+            <div class="form-row">
+              <label for="description">Description</label>
+              <textarea id="description" name="description" placeholder="Describe your event" rows="4"></textarea>
+            </div>
+
+            <div class="form-grid">
+              <div class="form-row">
+                <label for="start-date">Start Date</label>
+                <input id="start-date" name="startDate" type="date" />
+              </div>
+              <div class="form-row">
+                <label for="end-date">End Date</label>
+                <input id="end-date" name="endDate" type="date" />
+              </div>
+            </div>
+
+            <div class="form-row">
+              <label for="location">Location</label>
+              <input id="location" name="location" type="text" placeholder="Enter event location" />
+            </div>
+
+            <div class="form-row">
+              <label for="contact-email">Contact Email</label>
+              <input id="contact-email" name="contactEmail" type="email" placeholder="user@Bosch.in" autocomplete="email" />
+              <div class="field-note">This address will be used for event contact & notifications.</div>
+            </div>
+
+            <div class="form-row">
+              <label for="tags">Tags (comma separated)</label>
+              <input id="tags" name="tags" type="text" placeholder="Add tags for discoverability" />
+            </div>
+
+            <div class="form-row checkbox-row">
+              <input id="renewal" name="renewal" type="checkbox" />
+              <label for="renewal" class="checkbox-label">Enable renewal notifications</label>
+            </div>
+
+            <div class="form-row radios">
+              <label>Visibility</label>
+              <div class="radio-group">
+                <label><input type="radio" name="visibility" value="public" checked /> Public</label>
+                <label><input type="radio" name="visibility" value="private" /> Private</label>
+              </div>
+            </div>
+
+            <div class="form-actions">
+              <button type="button" id="save-draft" class="btn btn-outline">Save Draft</button>
+              <button type="submit" id="publish-event" class="btn btn-primary">Publish Event</button>
+            </div>
+          </form>
+        </div>
+      </section>
+
+      <!-- BROWSE -->
+      <section id="browse-event" class="browse-section" aria-label="Browse events">
+        <div class="page-inner">
+          <div class="filters-card">
+            <div class="search-row">
+              <span class="search-icon" aria-hidden="true">🔍</span>
+              <input id="searchInput" type="search" placeholder="Search events..." aria-label="Search events">
+            </div>
+            <div class="filters-row">
+              <select id="categoryFilter" aria-label="Filter by category">
+                <option value="all">All Categories</option>
+                <option value="tech">Technology</option>
+                <option value="marketing">Marketing</option>
+                <option value="business">Business</option>
+              </select>
+
+              <select id="statusFilter" aria-label="Filter by status">
+                <option value="all">All Status</option>
+                <option value="upcoming">Upcoming</option>
+                <option value="ongoing">Ongoing</option>
+                <option value="expired">Expired</option>
+              </select>
+
+              <input id="dateFrom" type="date" aria-label="Start date filter" />
+              <input id="dateTo" type="date" aria-label="End date filter" />
+
+              <button id="clearFilters" class="btn small" type="button">Clear</button>
+            </div>
+          </div>
+
+          <div class="events-grid" id="events-grid" role="list" aria-label="Events list"></div>
+
+          <div style="text-align:center; margin-top:16px;">
+            <button id="loadMore" class="btn small">Load more</button>
+          </div>
+        </div>
+      </section>
+
+      <!-- MY EVENTS -->
+      <section id="my-event" class="my-events-section" aria-label="My events">
+        <div class="page-inner">
+          <div class="my-tabs" role="tablist" aria-label="My events tabs">
+            <button class="my-tab active" role="tab" aria-selected="true" data-tab="tab-active">Active</button>
+            <button class="my-tab" role="tab" aria-selected="false" data-tab="tab-drafts">Drafts</button>
+            <button class="my-tab" role="tab" aria-selected="false" data-tab="tab-expired">Expired</button>
+          </div>
+
+          <div class="events-header-row">
+          <div class="col name">Event Name</div>
+          <div class="col start">Start Date</div>
+          <div class="col end">End Date</div>
+          <div class="col status">Status</div>
+          <div class="col subs">Subs</div>
+          <div class="col actions">Actions</div>
+          </div>
+          <div id="owner-events" class="events-table" role="table" aria-label="Your events"></div>
+        </div>
+      </section>
+
+      <!-- MY SUBSCRIPTIONS -->
+      <section id="my-subscription" class="subs-section" aria-label="My subscriptions">
+        <div class="page-inner">
+          
+          <div class="subs-header-row">
+          <div class="col event-name">Event Name</div>
+          <div class="col renewal">Renewal Date</div>
+          <div class="col status">Status</div>
+          <div class="col autorenew">Auto Renew</div>
+          <div class="col actions">Actions</div>
+        </div>
+
+        <div id="subscription-list" class="subs-table" role="table" aria-label="Subscriptions"></div>
+
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <!-- toaster -->
+  <div id="toasts" aria-live="polite" style="position:fixed; right:18px; bottom:18px; z-index:9999;"></div>
+
+  <!-- App JS -->
+<script src="app.js"></script>
+</body>
+</html>
