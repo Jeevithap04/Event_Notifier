@@ -29,8 +29,8 @@
   // --- Supabase helper (replace placeholders with your project values) ---
   const SupabaseHelper = (function(){
     // TODO: REPLACE these placeholders with your actual Supabase project values
-    const SUPABASE_URL = "https://YOUR-PROJECT.supabase.co";   // << replace
-    const SUPABASE_ANON_KEY = "YOUR_ANON_KEY";                 // << replace
+    const SUPABASE_URL = "https://supabase.com/dashboard/project/ridhgyfcgmsevazuzkkb";   // << replace
+    const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InJpZGhneWZjZ21zZXZhenV6a2tiIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjQxMTMwMjEsImV4cCI6MjA3OTY4OTAyMX0.ajifKz-8Xgnp_PtNEcTGZviLhczA8WAlyti-rStvq9E";                 // << replace
 
     let supabase = null;
     function init() {
@@ -851,3 +851,4 @@
   window.EN = { getEvents, saveEvents, getSubs, saveSubs, uid };
 
 })();
+
