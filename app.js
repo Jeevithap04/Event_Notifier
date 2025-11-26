@@ -9,7 +9,7 @@
   };
 
   // --- Utilities ---
-  const qs = (s, r=document) => r.querySelector(s);
+  /*const qs = (s, r=document) => r.querySelector(s);
   const qsa = (s, r=document) => Array.from(r.querySelectorAll(s));
   const uid = () => 'id_' + Date.now() + '_' + Math.floor(Math.random()*9999);
   const escapeHtml = s => String(s||'').replace(/[&<>"']/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
@@ -156,7 +156,266 @@
       unsubscribeByEmail,
       _raw: () => supabase
     };
-  })();
+  })();*/
+
+  // ---------------- Safe SupabaseHelper (uses real supabase when available, else falls back to localStorage) ----------------
+const SupabaseHelper = (function(){
+  // Try to get a global supabase client (if you included supabase JS and set correct URL/keys)
+  let supabase = null;
+  try {
+    if(window.supabase) supabase = window.supabase;               // if someone set window.supabase
+    if(window.supabaseJs && window.SUPABASE_URL && window.SUPABASE_ANON_KEY){
+      // optional: user added supabaseJs and keys to global scope
+      supabase = window.supabaseJs.createClient(window.SUPABASE_URL, window.SUPABASE_ANON_KEY);
+    }
+  } catch(e){
+    supabase = null;
+  }
+
+  // Helpers to map rows for UI (used by both real and fallback)
+  function mapRowToUIEvent(r){
+    if(!r) return null;
+    return {
+      id: String(r.id ?? r._id ?? r.id_string ?? uid()),
+      ownerId: r.user_id || r.ownerId || r.owner || r.owner_id || r.ownerId || r.ownerId || (r.owner && String(r.owner)),
+      name: r.event_name || r.name || r.title || '',
+      description: r.description || r.desc || '',
+      startDate: r.startdate || r.startDate || r.start || '',
+      endDate: r.enddate || r.endDate || r.end || '',
+      status: r.status || 'upcoming',
+      tags: r.tags ? (String(r.tags).split(',').map(s=>s.trim()).filter(Boolean)) : (Array.isArray(r.tags) ? r.tags : []),
+      contactEmail: r.contact_email || r.contactEmail || '',
+      renewalEnabled: !!(r.renewal || r.renewalEnabled),
+      createdAt: r.created_at || r.createdAt || new Date().toISOString(),
+      published: r.published === undefined ? !!r.published : !!r.published,
+      draft: !!r.draft,
+      subscriberIds: r.subscriberIds || r.subscriberIds || []
+    };
+  }
+
+  // ---------- FALLBACK (localStorage-backed) implementations ----------
+  function fallbackFetchEvents({ onlyUpcoming=false, limit=1000 }={}) {
+    const rows = LS.get('events') || [];
+    // ensure format
+    const mapped = (rows||[]).map(r => mapRowToUIEvent(r));
+    if(onlyUpcoming){
+      const today = new Date().toISOString().slice(0,10);
+      return mapped.filter(e => !e.startDate || e.startDate >= today).slice(0, limit);
+    }
+    return mapped.slice(0, limit);
+  }
+
+  function fallbackCreateEvent(payload){
+    const events = LS.get('events') || [];
+    const newEv = {
+      id: uid(),
+      user_id: payload.ownerId || payload.owner || payload.user_id || (payload.NTID ? 'u_' + payload.NTID : 'u_local'),
+      event_name: payload.name || payload.event_name || '',
+      description: payload.description || '',
+      startdate: payload.startDate || payload.startdate || null,
+      enddate: payload.endDate || payload.enddate || null,
+      status: payload.status || 'upcoming',
+      tags: Array.isArray(payload.tags) ? payload.tags.join(',') : (payload.tags||null),
+      contact_email: payload.contactEmail || payload.contact_email || '',
+      renewal: !!payload.renewalEnabled || !!payload.renewal,
+      published: payload.status === 'upcoming' || !!payload.published,
+      draft: payload.status === 'draft' || !!payload.draft,
+      created_at: payload.createdAt || new Date().toISOString()
+    };
+    events.push(newEv);
+    LS.set('events', events);
+    return mapRowToUIEvent(newEv);
+  }
+
+  function fallbackUpdateEvent(id, payload){
+    const events = LS.get('events') || [];
+    const idx = events.findIndex(e => String(e.id) === String(id));
+    if(idx === -1) throw new Error('Event not found');
+    const row = events[idx];
+    if(payload.name !== undefined) row.event_name = payload.name;
+    if(payload.startDate !== undefined) row.startdate = payload.startDate;
+    if(payload.endDate !== undefined) row.enddate = payload.endDate;
+    if(payload.status !== undefined) row.status = payload.status;
+    if(payload.tags !== undefined) row.tags = Array.isArray(payload.tags) ? payload.tags.join(',') : payload.tags;
+    if(payload.contactEmail !== undefined) row.contact_email = payload.contactEmail;
+    if(payload.renewalEnabled !== undefined) row.renewal = !!payload.renewalEnabled;
+    if(payload.published !== undefined) row.published = !!payload.published;
+    if(payload.draft !== undefined) row.draft = !!payload.draft;
+    events[idx] = row;
+    LS.set('events', events);
+    return mapRowToUIEvent(row);
+  }
+
+  function fallbackDeleteEvent(id){
+    let events = LS.get('events') || [];
+    const before = events.length;
+    events = events.filter(e => String(e.id) !== String(id));
+    LS.set('events', events);
+    return before !== events.length;
+  }
+
+  // SUBSCRIPTIONS fallback (stored in LS under key 'subscriptions')
+  function fallbackFetchSubscriptionsByEventName(eventName){
+    const subs = LS.get('subscriptions') || [];
+    return (subs || []).filter(s => String(s.event_name) === String(eventName)).map(s=>({
+      id: String(s.id || s._id || uid()),
+      event_name: s.event_name,
+      subscriber_email: s.subscriber_email || s.susbscriber_email || s.subscriber_email || '',
+      subscriber_NTID: s.subscriber_NTID || s.subscriber_ntid || s.subscriber || null,
+      auto_renewal: !!s.auto_renewal,
+      created_at: s.created_at || s.createdAt
+    }));
+  }
+
+  function fallbackSubscribeByEventName({ event_name, subscriber_email, subscriber_NTID=null, auto_renewal=true }){
+    let subs = LS.get('subscriptions') || [];
+    const exists = subs.find(s => (String(s.event_name) === String(event_name)) && ((s.subscriber_email && s.subscriber_email.toLowerCase()===String(subscriber_email||'').toLowerCase()) || (s.subscriber_NTID && String(s.subscriber_NTID) === String(subscriber_NTID))));
+    if(exists) return exists;
+    const row = {
+      id: uid(),
+      event_name,
+      subscriber_email,
+      subscriber_NTID,
+      auto_renewal: !!auto_renewal,
+      created_at: new Date().toISOString()
+    };
+    subs.push(row);
+    LS.set('subscriptions', subs);
+    return row;
+  }
+
+  function fallbackUnsubscribeByEmail(event_name, subscriber_email){
+    let subs = LS.get('subscriptions') || [];
+    const before = subs.length;
+    subs = subs.filter(s => !(String(s.event_name) === String(event_name) && s.subscriber_email && s.subscriber_email.toLowerCase() === String(subscriber_email||'').toLowerCase()));
+    LS.set('subscriptions', subs);
+    return subs;
+  }
+
+  // A minimal _raw shim so existing code that calls SupabaseHelper._raw() won't break.
+  // It returns an object with a from() that has a select() returning a Promise-like result with `.data`.
+  function fallbackRaw(){
+    return {
+      from(tbl){
+        // return a promise-like object with .select() that returns { data: ... }
+        const resPromise = Promise.resolve({ data: LS.get(tbl) || [] });
+        // also allow .or(...) chaining by providing an async or() method
+        resPromise.or = async function(){ return { data: LS.get(tbl) || [] }; };
+        return {
+          select: function(){ return resPromise; },
+          or: async function(){ return { data: LS.get(tbl) || [] }; }
+        };
+      }
+    };
+  }
+
+  // ---------- If real supabase is available and configured, use the real implementation ----------
+  if(supabase && typeof supabase.from === 'function'){
+    return {
+      init(){ return supabase; },
+      async fetchEvents(opts){ 
+        const { onlyUpcoming=false, limit=1000 } = opts||{};
+        let q = supabase.from('Events').select('*').order('startdate', { ascending:true }).limit(limit);
+        if(onlyUpcoming){
+          const today = new Date().toISOString().slice(0,10);
+          q = q.gte('startdate', today);
+        }
+        const { data, error } = await q;
+        if(error) throw error;
+        return (data||[]).map(mapRowToUIEvent);
+      },
+      async createEvent(payload){
+        const row = {
+          user_id: payload.ownerId || payload.user_id || payload.NTID || '',
+          event_name: payload.name || payload.event_name || '',
+          description: payload.description || '',
+          startdate: payload.startDate || null,
+          enddate: payload.endDate || null,
+          status: payload.status || 'upcoming',
+          tags: Array.isArray(payload.tags) ? payload.tags.join(',') : (payload.tags||null),
+          contact_email: payload.contactEmail || payload.contact_email || '',
+          renewal: !!payload.renewalEnabled || !!payload.renewal,
+          published: payload.status === 'upcoming' || !!payload.published,
+          draft: payload.status === 'draft' || !!payload.draft,
+          created_at: payload.createdAt || new Date().toISOString()
+        };
+        const { data, error } = await supabase.from('Events').insert([row]).select().single();
+        if(error) throw error;
+        return mapRowToUIEvent(data);
+      },
+      async updateEvent(id, payload){
+        const row = {};
+        if(payload.name !== undefined) row.event_name = payload.name;
+        if(payload.startDate !== undefined) row.startdate = payload.startDate;
+        if(payload.endDate !== undefined) row.enddate = payload.endDate;
+        if(payload.status !== undefined) row.status = payload.status;
+        if(payload.tags !== undefined) row.tags = Array.isArray(payload.tags) ? payload.tags.join(',') : payload.tags;
+        if(payload.contactEmail !== undefined) row.contact_email = payload.contactEmail;
+        if(payload.renewalEnabled !== undefined) row.renewal = payload.renewalEnabled;
+        if(payload.published !== undefined) row.published = payload.published;
+        if(payload.draft !== undefined) row.draft = payload.draft;
+        const { data, error } = await supabase.from('Events').update(row).eq('id', id).select().single();
+        if(error) throw error;
+        return mapRowToUIEvent(data);
+      },
+      async deleteEvent(id){
+        const { error } = await supabase.from('Events').delete().eq('id', id);
+        if(error) throw error;
+        return true;
+      },
+
+      // subscriptions using table 'subscriptions'
+      async fetchSubscriptionsByEventName(eventName){
+        const { data, error } = await supabase.from('subscriptions').select('*').eq('event_name', eventName);
+        if(error) throw error;
+        return (data||[]).map(s => ({
+          id: String(s.id),
+          event_name: s.event_name,
+          subscriber_email: s.subscriber_email || s.susbscriber_email || '',
+          subscriber_NTID: s.subscriber_NTID || s.subscriber_ntid || null,
+          auto_renewal: !!s.auto_renewal,
+          created_at: s.created_at
+        }));
+      },
+      async subscribeByEventName({ event_name, subscriber_email, subscriber_NTID=null, auto_renewal=true }){
+        // dedupe
+        const { data: existing } = await supabase.from('subscriptions').select('id').eq('event_name', event_name).eq('subscriber_email', subscriber_email).limit(1);
+        if(existing && existing.length) return existing[0];
+        const { data, error } = await supabase.from('subscriptions').insert([{
+          event_name,
+          subscriber_email,
+          subscriber_NTID,
+          auto_renewal,
+          created_at: new Date().toISOString()
+        }]).select().single();
+        if(error) throw error;
+        return data;
+      },
+      async unsubscribeByEmail(event_name, subscriber_email){
+        const { data, error } = await supabase.from('subscriptions').delete().match({ event_name, subscriber_email });
+        if(error) throw error;
+        return data;
+      },
+
+      // expose raw client
+      _raw: () => supabase
+    };
+  }
+
+  // ---------- FALLBACK (no supabase available) ----------
+  return {
+    init(){ return null; },
+    fetchEvents: async (opts) => fallbackFetchEvents(opts),
+    createEvent: async (payload) => fallbackCreateEvent(payload),
+    updateEvent: async (id,payload) => fallbackUpdateEvent(id,payload),
+    deleteEvent: async (id) => fallbackDeleteEvent(id),
+    fetchSubscriptionsByEventName: async (name) => fallbackFetchSubscriptionsByEventName(name),
+    subscribeByEventName: async (p) => fallbackSubscribeByEventName(p),
+    unsubscribeByEmail: async (event_name, subscriber_email) => fallbackUnsubscribeByEmail(event_name, subscriber_email),
+    _raw: () => fallbackRaw()
+  };
+})();
+
 
   // --- Seed / storage helpers ---
   function seedIfEmpty(){
@@ -851,4 +1110,5 @@
   window.EN = { getEvents, saveEvents, getSubs, saveSubs, uid };
 
 })();
+
 
