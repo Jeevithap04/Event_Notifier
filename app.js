@@ -1,11 +1,46 @@
 (() => {
-  const STORAGE_PREFIX = 'enotifier_';
-  const LS = {
-    key(k){ return STORAGE_PREFIX + k; },
-    get(k){ try { return JSON.parse(localStorage.getItem(this.key(k))); } catch(e){ return null; } },
-    set(k,v){ localStorage.setItem(this.key(k), JSON.stringify(v)); },
-    remove(k){ localStorage.removeItem(this.key(k)); }
-  };
+  //const STORAGE_PREFIX = 'enotifier_';
+  //const LS = {
+    //key(k){ return STORAGE_PREFIX + k; },
+    //get(k){ try { return JSON.parse(localStorage.getItem(this.key(k))); } catch(e){ return null; } },
+    //set(k,v){ localStorage.setItem(this.key(k), JSON.stringify(v)); },
+    //remove(k){ localStorage.removeItem(this.key(k)); }
+  //};
+
+  // OLD: function getEvents(){ return LS.get('events') || []; }
+// NEW:
+async function getEvents(){ 
+  try {
+    return await SupabaseHelper.fetchEvents({ onlyUpcoming:false });
+  } catch(err){
+    console.error('Supabase fetchEvents failed', err);
+    return []; // fallback empty
+  }
+}
+
+// OLD: function saveEvents(arr){ LS.set('events', arr); }
+// NEW: remove direct saveEvents usage; use createEvent/updateEvent/deleteEvent via SupabaseHelper
+// but to keep API compatibility, define a shim that throws to avoid accidental local saves:
+async function saveEvents(arr){ 
+  console.warn('saveEvents() called — use SupabaseHelper.createEvent/updateEvent/deleteEvent instead');
+  // optional: persist to LS for offline debugging:
+  LS.set('events', arr);
+}
+
+async function getSubs(){
+  // NOTE: we will fetch subs per-event when needed; a global fetch could be done too.
+  try {
+    // return all subs? optional:
+    // const sup = SupabaseHelper._raw(); const { data } = await sup.from('subscriptions').select('*'); return data;
+    return LS.get('subscriptions') || []; // fallback; prefer fetchSubscriptionsByEventName(eventName)
+  } catch(e){
+    console.error(e); return [];
+  }
+}
+async function saveSubs(arr){
+  console.warn('saveSubs() called — prefer SupabaseHelper.subscribeByEventName/unsubscribeByEmail');
+  LS.set('subscriptions', arr);
+}
 
   // --- Utilities ---
   const qs = (s, r=document) => r.querySelector(s);
@@ -24,6 +59,137 @@
     setTimeout(()=> box.remove(), t);
   }
 
+const SupabaseHelper = (function(){
+  const SUPABASE_URL = "https://supabase.com/dashboard/project/ridhgyfcgmsevazuzkkb";   // << replace
+  const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InJpZGhneWZjZ21zZXZhenV6a2tiIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjQxMTMwMjEsImV4cCI6MjA3OTY4OTAyMX0.ajifKz-8Xgnp_PtNEcTGZviLhczA8WAlyti-rStvq9E";                // << replace (anon key)
+
+  let supabase = null;
+  function init() {
+    if(!supabase) supabase = supabaseJs.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+    return supabase;
+  }
+
+  function mapRowToUIEvent(r){
+    return {
+      id: String(r.id),
+      ownerId: r.user_id,
+      name: r.event_name || '',
+      description: r.description || '',
+      startDate: r.startdate || '',
+      endDate: r.enddate || '',
+      status: r.status || '',
+      tags: r.tags ? (String(r.tags).split(',').map(s=>s.trim()).filter(Boolean)) : [],
+      contactEmail: r.contact_email || '',
+      renewalEnabled: !!r.renewal,
+      createdAt: r.created_at
+    };
+  }
+
+  // EVENTS
+  async function fetchEvents({ onlyUpcoming=false, limit=1000 }={}) {
+    init();
+    let q = supabase.from('"Events"').select('*').order('startdate', { ascending: true }).limit(limit);
+    if(onlyUpcoming){
+      const today = new Date().toISOString().slice(0,10);
+      q = q.gte('startdate', today);
+    }
+    const { data, error } = await q;
+    if(error) throw error;
+    return (data||[]).map(mapRowToUIEvent);
+  }
+
+  async function createEvent(payload){
+    init();
+    const row = {
+      user_id: payload.ownerId || payload.user_id || payload.NTID || '',
+      event_name: payload.name || payload.event_name || '',
+      startdate: payload.startDate || null,
+      enddate: payload.endDate || null,
+      status: payload.status || 'upcoming',
+      tags: Array.isArray(payload.tags) ? payload.tags.join(',') : (payload.tags||null),
+      contact_email: payload.contactEmail || payload.contact_email || '',
+      renewal: !!payload.renewalEnabled || !!payload.renewal,
+      created_at: payload.createdAt || new Date().toISOString()
+    };
+    const { data, error } = await supabase.from('"Events"').insert([row]).select().single();
+    if(error) throw error;
+    return mapRowToUIEvent(data);
+  }
+
+  async function updateEvent(id, payload){
+    init();
+    const row = {};
+    if(payload.name !== undefined) row.event_name = payload.name;
+    if(payload.startDate !== undefined) row.startdate = payload.startDate;
+    if(payload.endDate !== undefined) row.enddate = payload.endDate;
+    if(payload.status !== undefined) row.status = payload.status;
+    if(payload.tags !== undefined) row.tags = Array.isArray(payload.tags) ? payload.tags.join(',') : payload.tags;
+    if(payload.contactEmail !== undefined) row.contact_email = payload.contactEmail;
+    if(payload.renewalEnabled !== undefined) row.renewal = payload.renewalEnabled;
+    const { data, error } = await supabase.from('"Events"').update(row).eq('id', id).select().single();
+    if(error) throw error;
+    return mapRowToUIEvent(data);
+  }
+
+  async function deleteEvent(id){
+    init();
+    const { error } = await supabase.from('"Events"').delete().eq('id', id);
+    if(error) throw error;
+    return true;
+  }
+
+  // SUBSCRIPTIONS (linked by event_name - current schema)
+  async function fetchSubscriptionsByEventName(eventName){
+    init();
+    const { data, error } = await supabase.from('subscriptions').select('*').eq('event_name', eventName);
+    if(error) throw error;
+    return (data||[]).map(s => ({
+      id: String(s.id),
+      event_name: s.event_name,
+      subscriber_email: s.susbscriber_email,
+      subscriber_NTID: s.subscriber_NTID,
+      auto_renewal: !!s.auto_renewal,
+      created_at: s.created_at
+    }));
+  }
+
+  async function subscribeByEventName({ event_name, subscriber_email, subscriber_NTID=null, auto_renewal=true }){
+    init();
+    // dedupe
+    const { data: existing } = await supabase.from('subscriptions').select('id').eq('event_name', event_name).eq('susbscriber_email', subscriber_email).limit(1);
+    if(existing && existing.length) return existing[0];
+    const { data, error } = await supabase.from('subscriptions').insert([{
+      event_name,
+      susbscriber_email: subscriber_email,
+      subscriber_NTID,
+      auto_renewal,
+      created_at: new Date().toISOString()
+    }]).select().single();
+    if(error) throw error;
+    return data;
+  }
+
+  async function unsubscribeByEmail(event_name, subscriber_email){
+    init();
+    const { data, error } = await supabase.from('subscriptions').delete().match({ event_name, susbscriber_email: subscriber_email });
+    if(error) throw error;
+    return data;
+  }
+
+  return {
+    init,
+    fetchEvents,
+    createEvent,
+    updateEvent,
+    deleteEvent,
+    fetchSubscriptionsByEventName,
+    subscribeByEventName,
+    unsubscribeByEmail,
+    _raw: () => supabase
+  };
+})();
+
+  
   // --- Seed / storage helpers ---
   function seedIfEmpty(){
     if(!LS.get('users')) LS.set('users', [{ id:'u_demo', ntid:'demo', displayName:'demo', email:'demo@Bosch.in' }]);
@@ -181,7 +347,7 @@
     });
   }
 
-  function handleDeleteEvent(id){
+  /*function handleDeleteEvent(id){
     if(!confirm('Delete this event?')) return;
     let events = getEvents().filter(e => e.id !== id);
     saveEvents(events);
@@ -192,7 +358,26 @@
     reloadBrowse(true);
     renderDashboardCounts();
     loadMySubscriptions();
+  }*/
+  async function handleDeleteEvent(id){
+  if(!confirm('Delete this event?')) return;
+  try {
+    await SupabaseHelper.deleteEvent(id);
+    // optionally delete subscriptions linked by name (if you migrated to event_id later use proper FK)
+    const events = await SupabaseHelper.fetchEvents({ onlyUpcoming:false });
+    LS.set('events', events);
+    // refresh subscriptions cache from supabase or just update UI:
+    renderOwnerEventsTabs();
+    reloadBrowse(true);
+    renderDashboardCounts();
+    loadMySubscriptions();
+    toast('Event deleted', 'success');
+  } catch(err){
+    console.error(err);
+    toast('Delete failed: ' + (err.message||err), 'error');
   }
+}
+
 
   function handleEditEvent(id){
     const ev = getEvents().find(x => x.id === id && x.ownerId === currentUser.id);
@@ -262,7 +447,7 @@
       return { ok:true, field:null };
     }
 
-    saveDraftBtn.addEventListener('click', (ev) => {
+    /*saveDraftBtn.addEventListener('click', (ev) => {
       ev.preventDefault();
       const payload = gatherFormData();
       const editing = sessionStorage.getItem('editing_event');
@@ -282,7 +467,57 @@
           qs('#contact-email').value = `${currentUser.ntid}@Bosch.in`;
           return;
         }
-      }
+      }*/
+
+      saveDraftBtn.addEventListener('click', async (ev) => {
+  ev.preventDefault();
+  if(!currentUser){ toast('Please login to save drafts','error'); return; }
+  const payload = gatherFormData();
+  const editing = sessionStorage.getItem('editing_event');
+  try {
+    if(editing){
+      await SupabaseHelper.updateEvent(editing, {
+        name: payload.name,
+        description: payload.description,
+        startDate: payload.startDate,
+        endDate: payload.endDate,
+        contactEmail: payload.contactEmail,
+        tags: payload.tags,
+        renewalEnabled: payload.renewalEnabled,
+        status: computeStatus(payload)
+      });
+      sessionStorage.removeItem('editing_event');
+      toast('Draft updated (saved to server)', 'success');
+    } else {
+      // create event as draft (you can mark published=false by default in DB or using status)
+      const created = await SupabaseHelper.createEvent({
+        ownerId: currentUser.id,
+        name: payload.name,
+        description: payload.description,
+        startDate: payload.startDate,
+        endDate: payload.endDate,
+        contactEmail: payload.contactEmail,
+        tags: payload.tags,
+        renewalEnabled: payload.renewalEnabled,
+        status: 'draft'
+      });
+      toast('Draft saved (server)', 'success');
+    }
+    // refresh cached list and UI
+    const events = await SupabaseHelper.fetchEvents({ onlyUpcoming:false });
+    LS.set('events', events);
+    renderOwnerEventsTabs();
+    renderDashboardCounts();
+    reloadBrowse(true);
+    showSection('my-event');
+    form.reset();
+    qs('#contact-email').value = `${currentUser.ntid}@Bosch.in`;
+  } catch(err){
+    console.error(err);
+    toast('Save draft failed: ' + (err.message||err), 'error');
+  }
+});
+
       // new draft
       const id = uid();
       events.push({ id, ownerId: currentUser.id, ...payload, draft:true, published:false, subscriberIds:[], createdAt: new Date().toISOString(), status: computeStatus(payload) });
@@ -295,7 +530,7 @@
       qs('#contact-email').value = `${currentUser.ntid}@Bosch.in`;
     });
 
-    form.addEventListener('submit', (ev) => {
+    /*form.addEventListener('submit', (ev) => {
       ev.preventDefault();
       // VALIDATE
       const v = validateFormFields();
@@ -303,7 +538,57 @@
         toast(v.msg, 'error', 4000);
         if(v.field) v.field.focus();
         return;
-      }
+      }*/
+
+      form.addEventListener('submit', async (ev) => {
+  ev.preventDefault();
+  const v = validateFormFields();
+  if(!v.ok){ toast(v.msg, 'error'); if(v.field) v.field.focus(); return; }
+  if(!currentUser){ toast('Please login to publish', 'error'); return; }
+
+  const payload = gatherFormData();
+  const editing = sessionStorage.getItem('editing_event');
+  try {
+    if(editing){
+      await SupabaseHelper.updateEvent(editing, {
+        name: payload.name,
+        description: payload.description,
+        startDate: payload.startDate,
+        endDate: payload.endDate,
+        contactEmail: payload.contactEmail,
+        tags: payload.tags,
+        renewalEnabled: payload.renewalEnabled,
+        status: 'upcoming'
+      });
+      sessionStorage.removeItem('editing_event');
+      toast('Event updated & published', 'success');
+    } else {
+      await SupabaseHelper.createEvent({
+        ownerId: currentUser.id,
+        name: payload.name,
+        description: payload.description,
+        startDate: payload.startDate,
+        endDate: payload.endDate,
+        contactEmail: payload.contactEmail,
+        tags: payload.tags,
+        renewalEnabled: payload.renewalEnabled,
+        status: 'upcoming'
+      });
+      toast('Event published', 'success');
+    }
+    // refresh cached events and UI
+    const events = await SupabaseHelper.fetchEvents({ onlyUpcoming:false });
+    LS.set('events', events);
+    renderOwnerEventsTabs();
+    renderDashboardCounts();
+    reloadBrowse(true);
+    form.reset();
+    qs('#contact-email').value = `${currentUser.ntid}@Bosch.in`;
+  } catch(err){
+    console.error(err);
+    toast('Publish failed: ' + (err.message||err), 'error');
+  }
+});
 
       const payload = gatherFormData();
       let events = getEvents();
@@ -406,11 +691,20 @@
     });
   }
 
-  function isSubscribed(eventId){
+  /*function isSubscribed(eventId){
     return (getSubs() || []).some(s => s.eventId === eventId && s.userId === currentUser.id);
-  }
+  }*/
 
-  function toggleSubscribe(eventId){
+  async function isSubscribed(eventId){
+  // map eventId -> eventName using cached events
+  const events = LS.get('events') || [];
+  const ev = events.find(e => String(e.id) === String(eventId));
+  if(!ev) return false;
+  const subs = await SupabaseHelper.fetchSubscriptionsByEventName(ev.name);
+  return subs.some(s => (currentUser && (s.subscriber_NTID === currentUser.id || s.subscriber_email === currentUser.email)));
+}
+
+  /*function toggleSubscribe(eventId){
     let subs = getSubs();
     const exists = subs.find(s => s.eventId===eventId && s.userId===currentUser.id);
     if(exists){
@@ -425,10 +719,51 @@
       saveEvents(events); saveSubs(subs); toast('Subscribed', 'success');
     }
     renderOwnerEventsTabs(); loadMySubscriptions(); reloadBrowse(true);
+  }*/
+
+  async function toggleSubscribe(eventId){
+  if(!currentUser){
+    const email = prompt('Enter your email to subscribe');
+    if(!email) return toast('Email required', 'error');
+    // guest subscribe by email
+    const events = LS.get('events') || [];
+    const ev = events.find(e => String(e.id) === String(eventId));
+    if(!ev) return toast('Event not found', 'error');
+    const existing = await SupabaseHelper.fetchSubscriptionsByEventName(ev.name);
+    const already = existing.some(s => s.subscriber_email && s.subscriber_email.toLowerCase() === email.toLowerCase());
+    if(already){
+      await SupabaseHelper.unsubscribeByEmail(ev.name, email);
+      toast('Unsubscribed', 'info');
+    } else {
+      await SupabaseHelper.subscribeByEventName({ event_name: ev.name, subscriber_email: email, subscriber_NTID: null });
+      toast('Subscribed (by email)', 'success');
+    }
+  } else {
+    const events = LS.get('events') || [];
+    const ev = events.find(e => String(e.id) === String(eventId));
+    if(!ev) return toast('Event not found', 'error');
+    const existing = await SupabaseHelper.fetchSubscriptionsByEventName(ev.name);
+    const already = existing.some(s => s.subscriber_NTID === currentUser.id || (s.subscriber_email && s.subscriber_email.toLowerCase() === currentUser.email.toLowerCase()));
+    if(already){
+      await SupabaseHelper.unsubscribeByEmail(ev.name, currentUser.email);
+      toast('Unsubscribed', 'info');
+    } else {
+      await SupabaseHelper.subscribeByEventName({ event_name: ev.name, subscriber_email: currentUser.email, subscriber_NTID: currentUser.id });
+      toast('Subscribed', 'success');
+    }
   }
 
+  // refresh local cache and UI
+  const events = await SupabaseHelper.fetchEvents({ onlyUpcoming:false });
+  LS.set('events', events);
+  // optionally refresh subscription cache if you maintain one.
+  renderOwnerEventsTabs();
+  loadMySubscriptions();
+  reloadBrowse(true);
+}
+
   // --- My subscriptions ---
-  function loadMySubscriptions(){
+  /*function loadMySubscriptions(){
     const container = qs('#subscription-list');
     if(!container) return;
     const subs = getSubs().filter(s => s.userId === currentUser.id);
@@ -444,7 +779,49 @@
         <div class="col actions"><button class="btn btn-outline btn-sm unsub-btn" data-eventid="${ev.id}">Unsubscribe</button></div>
       </div>`;
     }).join('');
-    container.innerHTML = rows;
+    container.innerHTML = rows;*/
+
+    async function loadMySubscriptions(){
+  const container = qs('#subscription-list'); if(!container) return;
+  if(!currentUser) { container.innerHTML = '<div class="empty-state">Login to see subscriptions</div>'; return; }
+  try {
+    // fetch subs where subscriber_NTID == currentUser.id OR susbscriber_email == currentUser.email
+    const sup = SupabaseHelper._raw();
+    const cond = `subscriber_NTID.eq.${currentUser.id},susbscriber_email.eq.${encodeURIComponent(currentUser.email)}`;
+    const { data: subsData, error } = await sup.from('subscriptions').select('*').or(cond);
+    if(error) throw error;
+    if(!subsData || subsData.length === 0){ container.innerHTML = '<div class="empty-state">No subscriptions yet.</div>'; return; }
+    const rows = await Promise.all(subsData.map(async s => {
+      // find event (by event_name)
+      const events = LS.get('events') || [];
+      const ev = events.find(e => e.name === s.event_name) || { name:'(deleted)', endDate:'-', status:'expired' };
+      const statusClass = ev.status==='expired' ? 'status-expired' : (ev.status==='upcoming' ? 'status-warning' : 'status-active');
+      return `<div class="subs-row" data-id="${s.id}" data-eventid="${ev.id}">
+        <div class="col event-name">${escapeHtml(ev.name)}</div>
+        <div class="col renewal">${escapeHtml(ev.endDate||'-')}</div>
+        <div class="col status"><span class="status-badge ${statusClass}">${escapeHtml(ev.status||'Active')}</span></div>
+        <div class="col autorenew">${s.auto_renewal? 'Yes':'No'}</div>
+        <div class="col actions"><button class="btn btn-outline btn-sm unsub-btn" data-eventname="${escapeHtml(s.event_name)}" data-subscriber="${escapeHtml(s.susbscriber_email||s.subscriber_NTID)}">Unsubscribe</button></div>
+      </div>`;
+    }));
+    container.innerHTML = rows.join('');
+    container.querySelectorAll('.unsub-btn').forEach(b => b.addEventListener('click', async ()=> {
+      if(!confirm('Unsubscribe?')) return;
+      const eventName = b.dataset.eventname;
+      const subscriber = b.dataset.subscriber;
+      // prefer currentUser.email
+      await SupabaseHelper.unsubscribeByEmail(eventName, currentUser.email || subscriber);
+      toast('Unsubscribed', 'info');
+      loadMySubscriptions();
+      const events = await SupabaseHelper.fetchEvents({ onlyUpcoming:false });
+      LS.set('events', events);
+      renderOwnerEventsTabs(); renderDashboardCounts();
+    }));
+  } catch(err){
+    console.error(err);
+    container.innerHTML = '<div class="empty-state">Unable to load subscriptions</div>';
+  }
+}
 
     container.querySelectorAll('.unsub-btn').forEach(b => {
       b.addEventListener('click', () => {
@@ -552,11 +929,20 @@
     const dt = qs('#dateTo'); if(dt) dt.addEventListener('change', ()=> reloadBrowse(true));
     const clear = qs('#clearFilters'); if(clear) clear.addEventListener('click', ()=> { qs('#searchInput').value=''; qs('#categoryFilter').value='all'; qs('#statusFilter').value='all'; qs('#dateFrom').value=''; qs('#dateTo').value=''; reloadBrowse(true); });
     const loadMore = qs('#loadMore'); if(loadMore) loadMore.addEventListener('click', ()=> { browsePage++; reloadBrowse(false); });
-    const grid = qs('#events-grid'); if(grid) grid.addEventListener('click', (e) => { const btn = e.target.closest('.subscribe-btn'); if(!btn) return; toggleSubscribe(btn.dataset.id); btn.textContent = isSubscribed(btn.dataset.id) ? 'Subscribed' : 'Subscribe'; });
-  }
+    const grid = qs('#events-grid'); if(grid) grid.addEventListener('click', (e) => {
+  const btn = e.target.closest('.subscribe-btn'); if(!btn) return;
+  (async () => {
+    await toggleSubscribe(btn.dataset.id);
+    // async isSubscribed may be expensive; instead, update to "Subscribed" after successful toggle:
+    btn.classList.toggle('subscribed', btn.classList.contains('subscribed') ? false : true);
+    btn.textContent = btn.classList.contains('subscribed') ? 'Subscribed' : 'Subscribe';
+  })();
+});   //grid.addEventListener('click', (e) => { const btn = e.target.closest('.subscribe-btn'); if(!btn) return; toggleSubscribe(btn.dataset.id); btn.textContent = isSubscribed(btn.dataset.id) ? 'Subscribed' : 'Subscribe'; });
+   
+    }
   function debounce(fn, t=200){ let to=null; return (...a)=>{ clearTimeout(to); to=setTimeout(()=>fn(...a), t); }; }
 
-  function boot(){
+  /*function boot(){
     seedIfEmpty();
     loadSession();
 
@@ -570,7 +956,43 @@
       qs('#user-greeting').textContent = currentUser.ntid;
       qs('#contact-email').value = `${currentUser.ntid}@Bosch.in`;
       renderDashboardCounts(); renderOwnerEventsTabs(); initCreateEventForm(); initOwnerEventsDelegation(); wireMyEventTabs(); loadMySubscriptions(); reloadBrowse(true);
-    }
+    }*/
+
+    SupabaseHelper.init(); // initialize client
+loadSession(); // keep existing session behavior (NTID-based)
+
+if(!currentUser){
+  // old behavior: show login page (unchanged)
+} else {
+  // logged in -> fetch events from Supabase then render
+  try {
+    // fetch and cache events in-memory (optional)
+    const events = await SupabaseHelper.fetchEvents({ onlyUpcoming:false });
+    // cache locally for UI use (so existing render functions can remain mostly same)
+    LS.set('events', events); // keep as array of UI-mapped objects
+  } catch(err){
+    console.error('Failed to load events from Supabase', err);
+  }
+  // fetch subscriptions for current user (optional) and store locally for compatibility
+  try {
+    // naive approach: fetch all subscriptions where susbscriber_email = currentUser.email or subscriber_NTID = currentUser.id
+    const sup = SupabaseHelper._raw();
+    const { data: subsData } = await sup.from('subscriptions').select('*').or(`subscriber_NTID.eq.${currentUser.id},susbscriber_email.eq.${encodeURIComponent(currentUser.email)}`);
+    LS.set('subscriptions', subsData || []);
+  } catch(e){
+    console.warn('Failed to load subscriptions at boot', e);
+  }
+
+  // then show UI
+  document.getElementById('login-page').style.display = 'none';
+  document.getElementById('main-website').style.display = 'block';
+  document.body.classList.remove('login-active');
+  qs('#user-greeting').textContent = currentUser.ntid;
+  qs('#contact-email').value = `${currentUser.ntid}@Bosch.in`;
+
+  renderDashboardCounts(); renderOwnerEventsTabs(); initCreateEventForm(); initOwnerEventsDelegation(); wireMyEventTabs(); loadMySubscriptions(); reloadBrowse(true);
+}
+
 
     // login button
     const loginBtn = qs('#login-btn');
@@ -626,3 +1048,4 @@ qs('.logout-btn').addEventListener('click', ()=>{
   window.EN = { getEvents, saveEvents, getSubs, saveSubs, uid };
 
 })();
+
