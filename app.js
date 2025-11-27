@@ -1111,4 +1111,71 @@ const SupabaseHelper = (function(){
 
 })();
 
+//new for login
+(function(){
+  console.log('--- START DIAGNOSTIC ---');
+  console.log('Page URL:', location.href);
+  console.log('Scripts on page:');
+  [...document.scripts].forEach(s => console.log(' ', s.src || '(inline)'));
+  console.log('login button selectors to check: #login-btn, button[type="submit"], .continue-btn, #continue');
+  console.log(' #login-btn =>', !!document.querySelector('#login-btn'));
+  console.log(' button[type="submit"] =>', !!document.querySelector('button[type="submit"]'));
+  console.log(' .continue-btn =>', !!document.querySelector('.continue-btn'));
+  console.log(' button with text "Continue" =>', !![...document.querySelectorAll('button')].find(b=>b.textContent.trim().toLowerCase()==='continue'));
+  console.log('input NTID field ids: #ntid, input[name="ntid"], #ntidInput =>',
+              !!document.querySelector('#ntid') || !!document.querySelector('input[name="ntid"]') || !!document.querySelector('#ntidInput'));
+  console.log('Functions available: loginWithNTID ->', typeof window.loginWithNTID, ', boot ->', typeof window.boot);
+  console.log('SupabaseHelper present ->', !!window.SupabaseHelper);
+  console.log('LocalStorage keys (enotifier_*) ->', Object.keys(localStorage).filter(k=>k.indexOf('enotifier_')===0));
+  console.log('Current user session (LS):', (()=>{ try{ return JSON.parse(localStorage.getItem("enotifier_session")) }catch(e){return null}})());
+  // recent console errors (if any) - best-effort snapshot
+  console.log('Recent window.onerror handler? ->', !!window.onerror);
+  console.log('--- END DIAGNOSTIC ---');
+})();
 
+(function(){
+  // get NTID from SharePoint if possible
+  let ntid = null;
+  try { if(window._spPageContextInfo && _spPageContextInfo.userLoginName) ntid = _spPageContextInfo.userLoginName.split('@')[0]; } catch(e){}
+
+  // fallback: try reading from login form fields
+  if(!ntid){
+    const el = document.querySelector('#ntid') || document.querySelector('input[name="ntid"]') || document.querySelector('#ntidInput');
+    if(el) ntid = el.value && el.value.trim();
+  }
+  if(!ntid){
+    ntid = prompt('Enter NTID to simulate login (e.g. jdoe):');
+    if(!ntid) { console.warn('No NTID provided'); return; }
+  }
+
+  // If loginWithNTID exists, call it (preferred)
+  if(typeof window.loginWithNTID === 'function'){
+    try { window.loginWithNTID(ntid, true); console.log('Called loginWithNTID(', ntid, ')'); return; } catch(e){ console.error('loginWithNTID failed', e); }
+  }
+
+  // Otherwise set localStorage session keys expected by the app and trigger boot() if exists
+  try {
+    localStorage.setItem('enotifier_session', JSON.stringify({ id: 'u_' + ntid.toLowerCase(), ntid: ntid.toLowerCase(), email: ntid.toLowerCase() + '@Bosch.in', displayName: ntid }));
+    localStorage.setItem('enotifier_users', JSON.stringify([{ id: 'u_' + ntid.toLowerCase(), ntid: ntid.toLowerCase(), email: ntid.toLowerCase() + '@Bosch.in', displayName: ntid }]));
+    localStorage.setItem('enotifier_remember_ntid', ntid.toLowerCase());
+    console.log('Session values set in localStorage for', ntid);
+    if(typeof window.boot === 'function'){ window.boot().then(()=>console.log('boot() finished')).catch(e=>console.error('boot() error', e)); }
+    // if no boot, try to hide login UI manually
+    const lp = document.getElementById('login-page'); const mw = document.getElementById('main-website');
+    if(lp) lp.style.display='none';
+    if(mw) mw.style.display='block';
+    console.log('Manual login fallback applied.');
+  } catch(err){
+    console.error('Fallback login failed:', err);
+  }
+})();
+
+// Auto-login when running inside SharePoint using _spPageContextInfo
+try {
+  if(window._spPageContextInfo && !localStorage.getItem('enotifier_session')) {
+    const sNt = _spPageContextInfo.userLoginName.split('@')[0];
+    localStorage.setItem('enotifier_session', JSON.stringify({ id:'u_'+sNt, ntid:sNt, email:sNt+'@Bosch.in', displayName:sNt }));
+    // optionally call boot() if defined
+    if(typeof window.boot === 'function') setTimeout(()=> window.boot().catch(()=>{}), 300);
+  }
+} catch(e){}
