@@ -51,7 +51,7 @@ const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBh
       }, additional);
     }
 
-    /*async function request(path, method='GET', body=null, params=''){
+    async function request(path, method='GET', body=null, params=''){
       const url = `${SUPABASE_URL.replace(/\/$/,'')}/rest/v1/${path}${params ? (params.startsWith('?') ? params : '?' + params) : ''}`;
       const opts = { method, headers: headers() };
       if(body !== null) opts.body = JSON.stringify(body);
@@ -161,117 +161,7 @@ const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBh
       subscribeByEventName,
       unsubscribeByEmail
     };
-  })();*/
-
-       /* ---------------- Supabase REST helper (FIXED headers usage) ---------------- */
-  const SupabaseRest = (function(){
-    if(!SUPABASE_URL || !SUPABASE_ANON_KEY){
-      console.warn('Supabase REST placeholders not replaced yet.');
-    }
-
-    function baseHeaders(additional = {}) {
-      return Object.assign({
-        'apikey': SUPABASE_ANON_KEY,
-        'Authorization': `Bearer ${SUPABASE_ANON_KEY}`,
-        'Content-Type': 'application/json'
-      }, additional);
-    }
-
-    /**
-     * Generic request helper
-     * path - path after /rest/v1/, e.g. "Events"
-     * method - HTTP method
-     * body - body to JSON.stringify (null if none)
-     * params - query string (without leading ?), e.g. "select=*&order=startdate.asc"
-     * extraHeaders - object of additional headers e.g. { Prefer: 'return=representation' }
-     */
-    async function request(path, method='GET', body=null, params='', extraHeaders = {}) {
-      const url = `${SUPABASE_URL.replace(/\/$/,'')}/rest/v1/${path}${params ? ('?' + params) : ''}`;
-      const opts = { method, headers: baseHeaders(extraHeaders) };
-      if(body !== null) opts.body = JSON.stringify(body);
-      const res = await fetch(url, opts);
-      const ct = res.headers.get('content-type') || '';
-      let data = null;
-      if(ct.includes('application/json')) data = await res.json();
-      else data = await res.text();
-      if(!res.ok){
-        const msg = (data && data.message) ? data.message : (typeof data === 'string' ? data : JSON.stringify(data));
-        const err = new Error(`Supabase REST error ${res.status}: ${msg}`);
-        err.status = res.status; err.body = data;
-        throw err;
-      }
-      return data;
-    }
-
-    // EVENTS
-    async function fetchEvents({ onlyUpcoming=false, limit=1000 } = {}){
-      let params = `select=*&order=startdate.asc&limit=${limit}`;
-      if(onlyUpcoming){
-        const today = new Date().toISOString().slice(0,10);
-        params += `&startdate=gte.${today}`;
-      }
-      return await request('Events', 'GET', null, params);
-    }
-
-    async function createEvent(payload){
-      // Use Prefer header (must be header, not query param)
-      const data = await request('Events', 'POST', [payload], '', { Prefer: 'return=representation' });
-      return Array.isArray(data) ? data[0] : data;
-    }
-
-    async function updateEvent(id, payload){
-      // Patch by id; use Prefer header to return representation
-      const params = `id=eq.${encodeURIComponent(id)}`;
-      const data = await request('Events', 'PATCH', payload, params, { Prefer: 'return=representation' });
-      return Array.isArray(data) ? data[0] : data;
-    }
-
-    async function deleteEvent(id){
-      const params = `id=eq.${encodeURIComponent(id)}`;
-      await request('Events', 'DELETE', null, params);
-      return true;
-    }
-
-    // SUBSCRIPTIONS
-    async function fetchSubscriptionsByEventName(eventName){
-      const q = `select=*&event_name=eq.${encodeURIComponent(eventName)}`;
-      return await request('subscriptions', 'GET', null, q);
-    }
-
-    async function subscribeByEventName({ event_name, subscriber_email, subscriber_NTID=null, auto_renewal=true }){
-      const payload = {
-        event_name,
-        subscriber_email,
-        subscriber_NTID,
-        auto_renewal,
-        created_at: new Date().toISOString()
-      };
-      const data = await request('subscriptions', 'POST', [payload], '', { Prefer: 'return=representation' });
-      return Array.isArray(data) ? data[0] : data;
-    }
-
-    async function unsubscribeByEmail(event_name, subscriber_email){
-      // find matching subscription ids then delete by id
-      const subs = await fetchSubscriptionsByEventName(event_name);
-      const toDelete = subs.filter(s => (s.subscriber_email && s.subscriber_email.toLowerCase() === String(subscriber_email||'').toLowerCase()));
-      if(toDelete.length === 0) return [];
-      const ids = toDelete.map(d => encodeURIComponent(d.id)).join(',');
-      const params = `id=in.(${ids})`;
-      await request('subscriptions', 'DELETE', null, params);
-      return toDelete;
-    }
-
-    return {
-      fetchEvents,
-      createEvent,
-      updateEvent,
-      deleteEvent,
-      fetchSubscriptionsByEventName,
-      subscribeByEventName,
-      unsubscribeByEmail
-    };
   })();
-
 
   /* ============= In-memory caches (pure Supabase flow) ============= */
   let EVENTS_CACHE = [];      // array of event objects as returned by Supabase
@@ -1009,5 +899,6 @@ const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBh
   };
 
 })(); // IIFE end
+
 
 
