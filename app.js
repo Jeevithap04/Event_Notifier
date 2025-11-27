@@ -5,8 +5,8 @@
    ------------------------------------------------------------------ */
 
 /* ========== Supabase REST config - REPLACE these ========== */
-const SUPABASE_URL = "https://ridhgyfcgmsevazuzkkb.supabase.co";      // << REPLACE
-const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InJpZGhneWZjZ21zZXZhenV6a2tiIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjQxMTMwMjEsImV4cCI6MjA3OTY4OTAyMX0.ajifKz-8Xgnp_PtNEcTGZviLhczA8WAlyti-rStvq9E";                   // << REPLACE
+const SUPABASE_URL = "REPLACE_WITH_YOUR_PROJECT_URL";      // e.g. https://ridhgyfcgmsevazuzkkb.supabase.co
+const SUPABASE_ANON_KEY = "REPLACE_WITH_YOUR_ANON_KEY";    // your anon public key
 
 (() => {
   const STORAGE_PREFIX = 'enotifier_';
@@ -23,7 +23,6 @@ const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBh
   const uid = () => 'id_' + Date.now() + '_' + Math.floor(Math.random()*9999);
   const escapeHtml = s => String(s||'').replace(/[&<>"']/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
   function toast(msg, type='info', t=3500){
-    // ensure container exists
     let container = qs('#toasts');
     if(!container){ container = document.createElement('div'); container.id = 'toasts'; document.body.appendChild(container); }
     const box = document.createElement('div');
@@ -37,13 +36,13 @@ const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBh
     setTimeout(()=> box.remove(), t);
   }
 
-  /* ---------------- Supabase REST helper ---------------- */
+  /* ---------------- Supabase REST helper (REPLACED / FIXED) ---------------- */
   const SupabaseRest = (function(){
     if(!SUPABASE_URL || !SUPABASE_ANON_KEY){
       console.warn('Supabase REST placeholders not replaced yet.');
     }
 
-    function headers(additional = {}){
+    function baseHeaders(additional = {}) {
       return Object.assign({
         'apikey': SUPABASE_ANON_KEY,
         'Authorization': `Bearer ${SUPABASE_ANON_KEY}`,
@@ -51,9 +50,9 @@ const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBh
       }, additional);
     }
 
-    async function request(path, method='GET', body=null, params=''){
-      const url = `${SUPABASE_URL.replace(/\/$/,'')}/rest/v1/${path}${params ? (params.startsWith('?') ? params : '?' + params) : ''}`;
-      const opts = { method, headers: headers() };
+    async function request(path, method='GET', body=null, params='', extraHeaders = {}) {
+      const url = `${SUPABASE_URL.replace(/\/$/,'')}/rest/v1/${path}${params ? ('?' + params) : ''}`;
+      const opts = { method, headers: baseHeaders(extraHeaders) };
       if(body !== null) opts.body = JSON.stringify(body);
       const res = await fetch(url, opts);
       const ct = res.headers.get('content-type') || '';
@@ -69,9 +68,8 @@ const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBh
       return data;
     }
 
-    // Events
-    async function fetchEvents({ onlyUpcoming=false, limit=1000 } = {}){
-      // select all columns
+    // EVENTS
+    async function fetchEvents({ onlyUpcoming=false, limit=1000 } = {}) {
       let params = `select=*&order=startdate.asc&limit=${limit}`;
       if(onlyUpcoming){
         const today = new Date().toISOString().slice(0,10);
@@ -81,44 +79,23 @@ const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBh
     }
 
     async function createEvent(payload){
-      // prefer returning representation
-      const opts = { ...payload };
-      const data = await request('Events', 'POST', [opts], 'prefer=return=representation');
-      // Supabase returns array representation; return first
+      const data = await request('Events', 'POST', [payload], '', { Prefer: 'return=representation' });
       return Array.isArray(data) ? data[0] : data;
     }
 
     async function updateEvent(id, payload){
-      // patch by id
       const params = `id=eq.${encodeURIComponent(id)}`;
-      // Supabase expects PATCH via PATCH method, but REST supports POST with method=PATCH via header; we'll use PATCH
-      const urlPath = `Events?id=eq.${encodeURIComponent(id)}`;
-      // Directly call fetch to allow PATCH with headers
-      const url = `${SUPABASE_URL.replace(/\/$/,'')}/rest/v1/Events?id=eq.${encodeURIComponent(id)}`;
-      const res = await fetch(url, { method:'PATCH', headers: headers({ 'Prefer':'return=representation' }), body: JSON.stringify(payload) });
-      const ct = res.headers.get('content-type') || '';
-      const data = ct.includes('application/json') ? await res.json() : await res.text();
-      if(!res.ok){
-        const msg = (data && data.message) ? data.message : (typeof data === 'string' ? data : JSON.stringify(data));
-        const err = new Error(`Supabase REST update error ${res.status}: ${msg}`);
-        err.status = res.status; err.body = data;
-        throw err;
-      }
-      // returns array
+      const data = await request('Events', 'PATCH', payload, params, { Prefer: 'return=representation' });
       return Array.isArray(data) ? data[0] : data;
     }
 
     async function deleteEvent(id){
-      const url = `${SUPABASE_URL.replace(/\/$/,'')}/rest/v1/Events?id=eq.${encodeURIComponent(id)}`;
-      const res = await fetch(url, { method:'DELETE', headers: headers() });
-      if(!res.ok){
-        const txt = await res.text().catch(()=>null);
-        throw new Error('Delete failed: ' + res.status + ' ' + txt);
-      }
+      const params = `id=eq.${encodeURIComponent(id)}`;
+      await request('Events', 'DELETE', null, params);
       return true;
     }
 
-    // Subscriptions
+    // SUBSCRIPTIONS
     async function fetchSubscriptionsByEventName(eventName){
       const q = `select=*&event_name=eq.${encodeURIComponent(eventName)}`;
       return await request('subscriptions', 'GET', null, q);
@@ -132,23 +109,17 @@ const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBh
         auto_renewal,
         created_at: new Date().toISOString()
       };
-      const data = await request('subscriptions', 'POST', [payload], 'prefer=return=representation');
+      const data = await request('subscriptions', 'POST', [payload], '', { Prefer: 'return=representation' });
       return Array.isArray(data) ? data[0] : data;
     }
 
     async function unsubscribeByEmail(event_name, subscriber_email){
-      // find matching subscription ids then delete by id
       const subs = await fetchSubscriptionsByEventName(event_name);
       const toDelete = subs.filter(s => (s.subscriber_email && s.subscriber_email.toLowerCase() === String(subscriber_email||'').toLowerCase()));
       if(toDelete.length === 0) return [];
-      const ids = toDelete.map(d => d.id);
-      // delete by id eq.in.
-      const url = `${SUPABASE_URL.replace(/\/$/,'')}/rest/v1/subscriptions?id=in.(${ids.map(i=>encodeURIComponent(i)).join(',')})`;
-      const res = await fetch(url, { method:'DELETE', headers: headers() });
-      if(!res.ok){
-        const txt = await res.text().catch(()=>null);
-        throw new Error('Unsubscribe failed: ' + res.status + ' ' + txt);
-      }
+      const ids = toDelete.map(d => encodeURIComponent(d.id)).join(',');
+      const params = `id=in.(${ids})`;
+      await request('subscriptions', 'DELETE', null, params);
       return toDelete;
     }
 
@@ -164,15 +135,14 @@ const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBh
   })();
 
   /* ============= In-memory caches (pure Supabase flow) ============= */
-  let EVENTS_CACHE = [];      // array of event objects as returned by Supabase
-  let SUBS_CACHE = [];        // optional cache of subscriptions for the current user
+  let EVENTS_CACHE = [];
+  let SUBS_CACHE = [];
 
   function getEvents(){ return EVENTS_CACHE; }
   function saveEvents(arr){ EVENTS_CACHE = Array.isArray(arr)?arr:[]; }
   async function refreshEvents(){
     try {
       const rows = await SupabaseRest.fetchEvents({ onlyUpcoming:false, limit:1000 });
-      // map dates to YYYY-MM-DD if needed - keep as-is (supabase returns date string)
       saveEvents(rows.map(r => ({
         id: String(r.id),
         ownerId: r.user_id,
@@ -198,10 +168,8 @@ const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBh
   async function refreshSubsForUser(currentUserParam){
     if(!currentUserParam) { SUBS_CACHE = []; return []; }
     try {
-      // fetch subscriptions where subscriber_NTID == id OR subscriber_email == email
       const email = currentUserParam.email || '';
       const ntid = currentUserParam.id || '';
-      // Supabase REST `or` requires RPC or use filter: ?or=(subscriber_NTID.eq.<ntid>,subscriber_email.eq.<email>)
       const conditions = `or=(subscriber_NTID.eq.${encodeURIComponent(ntid)},subscriber_email.eq.${encodeURIComponent(email)})&select=*`;
       const url = `${SUPABASE_URL.replace(/\/$/,'')}/rest/v1/subscriptions?${conditions}`;
       const res = await fetch(url, { method:'GET', headers: { 'apikey': SUPABASE_ANON_KEY, 'Authorization': `Bearer ${SUPABASE_ANON_KEY}` } });
@@ -219,8 +187,6 @@ const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBh
     }
   }
 
-  /* ---------------- The original UI logic with Supabase calls substituted ---------------- */
-
   // --- Session & auth (NTID only) ---
   let currentUser = null;
   function setSession(u){ LS.set('session', u); currentUser = u; }
@@ -231,7 +197,7 @@ const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBh
       const users = LS.get('users') || [];
       const u = users.find(x => x.id === s.id);
       if(u) currentUser = { id:u.id, ntid:u.ntid, email:u.email, displayName:u.displayName };
-      else currentUser = s; // fallback if users absent
+      else currentUser = s;
     }
   }
 
@@ -264,7 +230,6 @@ const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBh
     if(qs('#hero-active-events')) qs('#hero-active-events').textContent = published.length;
     if(qs('#hero-subscribed-events')) qs('#hero-subscribed-events').textContent = subs.length;
 
-    // Upcoming renewals list
     const ur = qs('#upcoming-renewals');
     if(ur){
       ur.innerHTML = '';
@@ -282,7 +247,6 @@ const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBh
       });
     }
 
-    // Recent subscriptions list
     const rs = qs('#recent-subs');
     if(rs){
       rs.innerHTML = '';
@@ -302,7 +266,6 @@ const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBh
   function renderOwnerEventsTabs(){
     const container = qs('#owner-events');
     if(!container) return;
-    // sync status in memory
     const all = getEvents();
     all.forEach(e => { e.status = computeStatus(e); });
 
@@ -346,7 +309,6 @@ const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBh
     `;
   }
 
-  // delegation for owner events (single attach)
   function initOwnerEventsDelegation(){
     const container = qs('#owner-events');
     if(!container) return;
@@ -419,16 +381,14 @@ const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBh
     }
   }
 
-  // --- Create form (guarded attach to avoid duplicates) ---
   function initCreateEventForm(){
     const form = qs('#create-event-form');
     if(!form) return;
-    if(form._createAttached) return; // guard
+    if(form._createAttached) return;
     form._createAttached = true;
 
     const saveDraftBtn = qs('#save-draft');
 
-    // validation helper (returns first invalid field or null)
     function validateFormFields(){
       const reqs = [
         { sel: '#event-name', msg: 'Event name' },
@@ -443,11 +403,9 @@ const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBh
         if(!el) return { ok:false, field:null, msg:`Missing field ${r.sel}` };
         if(String(el.value || '').trim() === '') return { ok:false, field:el, msg:`${r.msg} is required` };
       }
-      // simple email pattern
       const email = qs('#contact-email').value.trim();
       const emailRe = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
       if(!emailRe.test(email)) return { ok:false, field: qs('#contact-email'), msg:'Enter a valid contact email' };
-      // dates sanity: start <= end
       const s = qs('#start-date').value; const e = qs('#end-date').value;
       if(s && e && new Date(s) > new Date(e)) return { ok:false, field: qs('#start-date'), msg:'Start date cannot be after end date' };
       return { ok:true, field:null };
@@ -625,10 +583,8 @@ const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBh
   async function isSubscribed(eventId){
     const ev = getEvents().find(e => String(e.id) === String(eventId));
     if(!ev) return false;
-    // check in SUBS_CACHE or query server
     const subs = SUBS_CACHE.filter(s => s.event_name === ev.name);
     if(subs.length === 0 && currentUser){
-      // refresh for user
       await refreshSubsForUser(currentUser);
     }
     return (SUBS_CACHE || []).some(s => s.event_name === ev.name && (s.subscriber_NTID === currentUser.id || (s.subscriber_email && s.subscriber_email.toLowerCase() === currentUser.email.toLowerCase())));
@@ -647,258 +603,5 @@ const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBh
         toast('Unsubscribed', 'info');
       } else {
         await SupabaseRest.subscribeByEventName({ event_name: ev.name, subscriber_email: email, subscriber_NTID: null });
-        toast('Subscribed (by email)', 'success');
-      }
-    } else {
-      const ev = getEvents().find(e => String(e.id) === String(eventId));
-      if(!ev) return toast('Event not found', 'error');
-      const existing = await SupabaseRest.fetchSubscriptionsByEventName(ev.name);
-      const already = existing.some(s => s.subscriber_NTID === currentUser.id || (s.subscriber_email && s.subscriber_email.toLowerCase() === currentUser.email.toLowerCase()));
-      if(already){
-        await SupabaseRest.unsubscribeByEmail(ev.name, currentUser.email);
-        toast('Unsubscribed', 'info');
-      } else {
-        await SupabaseRest.subscribeByEventName({ event_name: ev.name, subscriber_email: currentUser.email, subscriber_NTID: currentUser.id });
-        toast('Subscribed', 'success');
-      }
-    }
-
-    await refreshEvents();
-    await refreshSubsForUser(currentUser);
-    renderOwnerEventsTabs();
-    loadMySubscriptions();
-    reloadBrowse(true);
-  }
-
-  // --- My subscriptions ---
-  async function loadMySubscriptions(){
-    const container = qs('#subscription-list');
-    if(!container) return;
-    if(!currentUser) { container.innerHTML = '<div class="empty-state">Login to see subscriptions</div>'; return; }
-    try {
-      await refreshSubsForUser(currentUser);
-      const subs = SUBS_CACHE.filter(s => s.subscriber_NTID === currentUser.id || (s.subscriber_email && s.subscriber_email.toLowerCase() === currentUser.email.toLowerCase()));
-      if(!subs || subs.length === 0){ container.innerHTML = '<div class="empty-state">No subscriptions yet.</div>'; return; }
-      const rows = subs.map(s => {
-        const ev = getEvents().find(e => e.name === s.event_name) || { name:'(deleted)', endDate:'-', status:'expired' };
-        const statusClass = ev.status==='expired' ? 'status-expired' : (ev.status==='upcoming' ? 'status-warning' : 'status-active');
-        return `<div class="subs-row" data-id="${s.id}" data-eventid="${ev.id}">
-          <div class="col event-name">${escapeHtml(ev.name)}</div>
-          <div class="col renewal">${escapeHtml(ev.endDate||'-')}</div>
-          <div class="col status"><span class="status-badge ${statusClass}">${escapeHtml(ev.status||'Active')}</span></div>
-          <div class="col autorenew">${s.auto_renewal? 'Yes':'No'}</div>
-          <div class="col actions"><button class="btn btn-outline btn-sm unsub-btn" data-eventname="${escapeHtml(s.event_name)}" data-subscriber="${escapeHtml(s.subscriber_email||s.subscriber_NTID)}">Unsubscribe</button></div>
-        </div>`;
-      }).join('');
-      container.innerHTML = rows;
-      container.querySelectorAll('.unsub-btn').forEach(b => b.addEventListener('click', async ()=> {
-        if(!confirm('Unsubscribe?')) return;
-        const eventName = b.dataset.eventname;
-        const subscriber = b.dataset.subscriber;
-        await SupabaseRest.unsubscribeByEmail(eventName, currentUser.email || subscriber);
-        toast('Unsubscribed', 'info');
-        await refreshSubsForUser(currentUser);
-        await refreshEvents();
-        renderOwnerEventsTabs(); renderDashboardCounts();
-      }));
-    } catch(err){
-      console.error(err);
-      container.innerHTML = '<div class="empty-state">Unable to load subscriptions</div>';
-    }
-  }
-
-  // --- Navigation and helpers ---
-  function wireNav(){
-    qsa('.nav-links a').forEach(a => a.addEventListener('click', (e) => { e.preventDefault(); showSection(a.dataset.target); }));
-    qsa('.create-btn').forEach(b => b.addEventListener('click', ()=> showSection('create-event')));
-    const profile = qs('#profile-btn');
-    if(profile) profile.addEventListener('click', ()=> { if(confirm('Logout?')) { logoutFlow(); } });
-  }
-
-  // showSection ensures dashboard scrolls to top
-  function showSection(id){
-    qsa('section').forEach(s => s.classList.remove('active'));
-    const sec = qs('#' + id);
-    if(sec) sec.classList.add('active');
-    qsa('.nav-links a').forEach(a => a.classList.toggle('active', a.dataset.target === id));
-    setTimeout(()=> {
-      if(id === 'dashboard'){
-        window.scrollTo({ top: 0, behavior: 'instant' });
-        const main = document.querySelector('main');
-        if(main && typeof main.scrollTo === 'function') main.scrollTo({ top: 0 });
-      } else {
-        sec && sec.focus();
-      }
-    }, 60);
-    if(id === 'my-event') {
-      qsa('.my-tab').forEach(btn => {
-        btn.classList.toggle('active', btn.dataset.tab === 'tab-active');
-        btn.setAttribute('aria-selected', btn.dataset.tab === 'tab-active' ? 'true' : 'false');
-      });
-      renderOwnerEventsTabs();
-    }
-  }
-
-  function wireMyEventTabs(){
-    qsa('.my-tab').forEach(btn => btn.addEventListener('click', () => {
-      qsa('.my-tab').forEach(b => { b.classList.remove('active'); b.setAttribute('aria-selected','false'); });
-      btn.classList.add('active'); btn.setAttribute('aria-selected','true');
-      const which = btn.dataset.tab;
-      const panelActive = qs('#panel-active'); const panelDrafts = qs('#panel-drafts'); const panelExpired = qs('#panel-expired');
-      if(!panelActive || !panelDrafts || !panelExpired) return;
-      panelActive.classList.toggle('active', which === 'tab-active');
-      panelDrafts.classList.toggle('active', which === 'tab-drafts');
-      panelExpired.classList.toggle('active', which === 'tab-expired');
-    }));
-  }
-
-  // --- Login flow ---
-  function loginWithNTID(ntid, remember=false){
-    if(!ntid) { toast('Enter NTID', 'error'); return; }
-    let users = LS.get('users') || [];
-    let user = users.find(u => u.ntid.toLowerCase() === ntid.toLowerCase());
-    if(!user){
-      user = { id: 'u_' + ntid.toLowerCase(), ntid, displayName: ntid, email: `${ntid}@Bosch.in` };
-      users.push(user); LS.set('users', users);
-    }
-    setSession({ id: user.id, ntid: user.ntid, email: user.email, displayName: user.displayName });
-    if(remember) localStorage.setItem(LS.key('remember_ntid'), user.ntid);
-
-    const lp = document.getElementById('login-page'); const mw = document.getElementById('main-website');
-    if(lp) lp.style.display='none';
-    if(mw) mw.style.display='block';
-    document.body.classList.remove('login-active');
-    qs('#user-greeting').textContent = user.ntid;
-    qs('#contact-email').value = `${user.ntid}@Bosch.in`;
-    showSection('dashboard');
-    window.scrollTo({ top: 0, behavior: 'instant' });
-
-    // initialize data from server
-    (async () => {
-      try { await refreshEvents(); } catch(e){ console.warn('refreshEvents login:', e); }
-      try { await refreshSubsForUser(currentUser); } catch(e){ console.warn('refreshSubsForUser login:', e); }
-      renderDashboardCounts(); renderOwnerEventsTabs(); initCreateEventForm(); initOwnerEventsDelegation(); wireMyEventTabs(); loadMySubscriptions(); reloadBrowse(true);
-    })();
-
-    toast(`Welcome ${user.ntid}`, 'success', 1600);
-  }
-
-  function logoutFlow(){
-    clearSession();
-    const lp = document.getElementById('login-page'); const mw = document.getElementById('main-website');
-    if(lp) lp.style.display='flex';
-    if(mw) mw.style.display='none';
-    document.body.classList.add('login-active');
-  }
-
-  // --- Boot/Wiring ---
-  function initBrowseHandlers(){
-    const s = qs('#searchInput'); if(s) s.addEventListener('input', debounce(()=> reloadBrowse(true), 300));
-    const cat = qs('#categoryFilter'); if(cat) cat.addEventListener('change', ()=> reloadBrowse(true));
-    const st = qs('#statusFilter'); if(st) st.addEventListener('change', ()=> reloadBrowse(true));
-    const df = qs('#dateFrom'); if(df) df.addEventListener('change', ()=> reloadBrowse(true));
-    const dt = qs('#dateTo'); if(dt) dt.addEventListener('change', ()=> reloadBrowse(true));
-    const clear = qs('#clearFilters'); if(clear) clear.addEventListener('click', ()=> { if(qs('#searchInput')) qs('#searchInput').value=''; if(qs('#categoryFilter')) qs('#categoryFilter').value='all'; if(qs('#statusFilter')) qs('#statusFilter').value='all'; if(qs('#dateFrom')) qs('#dateFrom').value=''; if(qs('#dateTo')) qs('#dateTo').value=''; reloadBrowse(true); });
-    const loadMore = qs('#loadMore'); if(loadMore) loadMore.addEventListener('click', ()=> { browsePage++; reloadBrowse(false); });
-    const grid = qs('#events-grid'); if(grid) grid.addEventListener('click', (e) => {
-      const btn = e.target.closest('.subscribe-btn'); if(!btn) return;
-      (async () => {
-        await toggleSubscribe(btn.dataset.id);
-        btn.classList.toggle('subscribed', btn.classList.contains('subscribed') ? false : true);
-        btn.textContent = btn.classList.contains('subscribed') ? 'Subscribed' : 'Subscribe';
-      })();
-    });
-  }
-  function debounce(fn, t=200){ let to=null; return (...a)=>{ clearTimeout(to); to=setTimeout(()=>fn(...a), t); }; }
-
-  async function boot(){
-    // seed users only
-    if(!LS.get('users')) LS.set('users', [{ id:'u_demo', ntid:'demo', displayName:'demo', email:'demo@Bosch.in' }]);
-    loadSession();
-
-    // if remembered NTID -> auto login
-    const rem = localStorage.getItem(LS.key('remember_ntid'));
-    if(rem && !currentUser) { loginWithNTID(rem, true); return; }
-
-    if(currentUser){
-      // fetch server data
-      try { await refreshEvents(); } catch(e){ console.warn('initial refreshEvents', e); }
-      try { await refreshSubsForUser(currentUser); } catch(e){ console.warn('initial refreshSubsForUser', e); }
-
-      const lp = document.getElementById('login-page'); const mw = document.getElementById('main-website');
-      if(lp) lp.style.display='none';
-      if(mw) mw.style.display='block';
-      document.body.classList.remove('login-active');
-      qs('#user-greeting').textContent = currentUser.ntid;
-      qs('#contact-email').value = `${currentUser.ntid}@Bosch.in`;
-      renderDashboardCounts(); renderOwnerEventsTabs(); initCreateEventForm(); initOwnerEventsDelegation(); wireMyEventTabs(); loadMySubscriptions(); reloadBrowse(true);
-    } else {
-      const lp = document.getElementById('login-page'); const mw = document.getElementById('main-website');
-      if(lp) lp.style.display='flex';
-      if(mw) mw.style.display='none';
-      document.body.classList.add('login-active');
-    }
-
-    // login button
-    const loginBtn = qs('#login-btn');
-    if(loginBtn) loginBtn.addEventListener('click', (e)=> { e.preventDefault(); const ntid = qs('#ntid').value.trim(); const remember = !!qs('#remember').checked; if(!ntid) return toast('Please enter NTID', 'error'); loginWithNTID(ntid, remember); });
-
-    wireNav();
-    initBrowseHandlers();
-    initCreateEventForm();
-    initOwnerEventsDelegation();
-    wireMyEventTabs();
-  }
-
-  // Correct view-all routing
-  qsa('.panel-header .view-all').forEach(v => {
-    v.addEventListener('click', e => {
-      e.preventDefault();
-      const type = v.dataset.open;
-
-      if (type === 'renewals') {
-        showSection('my-event');   // Upcoming Renewals → My Event
-      }
-
-      if (type === 'recent-subs') {
-        showSection('my-subscription');  // Recent Subscriptions → My Subscription
-      }
-    });
-  });
-
-  // Profile dropdown toggle
-  const pd = qs('#profile-dropdown');
-  const pb = qs('#profile-btn');
-  if(pb) {
-    pb.addEventListener('click', (e)=>{
-      e.stopPropagation();
-      pd && pd.classList.toggle('hidden');
-      if(currentUser) qs('#pd-ntid').textContent = currentUser.ntid + "@Bosch.com";
-    });
-  }
-
-  // Hide when clicking outside
-  document.addEventListener('click', ()=> pd && pd.classList.add('hidden') );
-
-  // Logout
-  const logoutBtn = qs('.logout-btn');
-  if(logoutBtn) {
-    logoutBtn.addEventListener('click', ()=>{
-      if(confirm("Are you sure you want to logout?")){
-        logoutFlow();
-      }
-    });
-  }
-
-  document.addEventListener('DOMContentLoaded', () => { boot().catch(e => console.error('boot error', e)); });
-
-  // Expose debug helpers
-  window.EN = {
-    refreshEvents, refreshSubsForUser, getEvents,
-    SupabaseRest
-  };
-
-})(); // IIFE end
-
-
+        toast
 
