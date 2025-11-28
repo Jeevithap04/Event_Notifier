@@ -47,21 +47,51 @@ const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBh
       return Object.assign({
         'apikey': SUPABASE_ANON_KEY,
         'Authorization': `Bearer ${SUPABASE_ANON_KEY}`,
-        'Content-Type': 'application/json',
-        'Accept': 'application/json'
+        'Content-Type': 'application/json'
       }, additional);
     }
 
     /**
-     * request(path, method='GET', body=null, params='', additionalHeaders={})
-     * - path: table name or path under /rest/v1
-     * - params: query string without leading ? (e.g. "select=*&order=startdate.asc")
-     * - additionalHeaders: object of header key-values to merge (e.g. { Prefer: 'return=representation' })
+     * request(path, method='GET', body=null, params='')
+     * - params is the raw query-string-like string (e.g. 'select=*&limit=10' OR '?select=*&limit=10')
+     * - if params contains any prefer=... tokens they will be converted into Prefer headers (and removed from the URL)
      */
-    async function request(path, method='GET', body=null, params='', additionalHeaders = {}){
-      const url = `${SUPABASE_URL.replace(/\/$/,'')}/rest/v1/${path}${params ? (params.startsWith('?') ? params : '?' + params) : ''}`;
-      const opts = { method, headers: headers(additionalHeaders) };
+    async function request(path, method='GET', body=null, params=''){
+      // normalize params string
+      let paramStr = String(params||'').trim();
+      if(paramStr.startsWith('?')) paramStr = paramStr.slice(1);
+
+      // collect Prefer header(s) from params if present and remove them from query
+      const preferHeaders = [];
+      let leftoverParts = [];
+      if(paramStr.length){
+        const parts = paramStr.split('&').map(p => p.trim()).filter(Boolean);
+        parts.forEach(p => {
+          const [k, ...rest] = p.split('=');
+          const key = (k||'').trim();
+          const val = (rest || []).join('=');
+          if(key.toLowerCase() === 'prefer'){
+            preferHeaders.push(val);
+          } else {
+            leftoverParts.push(p);
+          }
+        });
+      }
+
+      // rebuild final url
+      const query = leftoverParts.length ? ('?' + leftoverParts.join('&')) : '';
+      const url = `${SUPABASE_URL.replace(/\/$/,'')}/rest/v1/${path}${query}`;
+
+      // prepare options and headers
+      const extraHeaders = {};
+      if(preferHeaders.length){
+        // join multiple prefer tokens into one header if necessary
+        extraHeaders['Prefer'] = preferHeaders.join(',');
+      }
+      const opts = { method, headers: headers(extraHeaders) };
       if(body !== null) opts.body = JSON.stringify(body);
+
+      // execute
       const res = await fetch(url, opts);
       const ct = res.headers.get('content-type') || '';
       let data = null;
@@ -82,22 +112,24 @@ const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBh
       let params = `select=*&order=startdate.asc&limit=${limit}`;
       if(onlyUpcoming){
         const today = new Date().toISOString().slice(0,10);
-        // use proper filter param (startdate.gte.<date>)
+        // When building query filters for dates, Supabase expects them as query params rather than appended
+        // but we will keep filtering client-side for consistency; however keep param for server-side filtering if desired
         params += `&startdate=gte.${today}`;
       }
       return await request('Events', 'GET', null, params);
     }
 
     async function createEvent(payload){
-      // prefer returning representation via header (NOT query param)
+      // prefer returning representation -> use Prefer header (the request helper will accept 'prefer=return=representation' if passed as params)
+      // but calling request with params 'prefer=return=representation' will now set Prefer header correctly (not a query filter).
       const opts = { ...payload };
-      const data = await request('Events', 'POST', [opts], '', { 'Prefer': 'return=representation' });
+      const data = await request('Events', 'POST', [opts], 'prefer=return=representation');
       // Supabase returns array representation; return first
       return Array.isArray(data) ? data[0] : data;
     }
 
     async function updateEvent(id, payload){
-      // patch by id
+      // patch by id using PATCH and Prefer header for representation
       const url = `${SUPABASE_URL.replace(/\/$/,'')}/rest/v1/Events?id=eq.${encodeURIComponent(id)}`;
       const res = await fetch(url, { method:'PATCH', headers: headers({ 'Prefer':'return=representation' }), body: JSON.stringify(payload) });
       const ct = res.headers.get('content-type') || '';
@@ -124,8 +156,6 @@ const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBh
 
     // Subscriptions
     async function fetchSubscriptionsByEventName(eventName){
-      // build query param - event_name eq <value>
-      // NOTE: don't place `prefer=...` here; no header necessary for GET
       const q = `select=*&event_name=eq.${encodeURIComponent(eventName)}`;
       return await request('subscriptions', 'GET', null, q);
     }
@@ -138,8 +168,7 @@ const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBh
         auto_renewal,
         created_at: new Date().toISOString()
       };
-      // request POST with header Prefer: return=representation
-      const data = await request('subscriptions', 'POST', [payload], '', { 'Prefer': 'return=representation' });
+      const data = await request('subscriptions', 'POST', [payload], 'prefer=return=representation');
       return Array.isArray(data) ? data[0] : data;
     }
 
@@ -208,7 +237,7 @@ const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBh
       // fetch subscriptions where subscriber_NTID == id OR subscriber_email == email
       const email = currentUserParam.email || '';
       const ntid = currentUserParam.id || '';
-      // Supabase REST `or` filter
+      // Supabase REST `or` requires RPC or use filter: ?or=(subscriber_NTID.eq.<ntid>,subscriber_email.eq.<email>)
       const conditions = `or=(subscriber_NTID.eq.${encodeURIComponent(ntid)},subscriber_email.eq.${encodeURIComponent(email)})&select=*`;
       const url = `${SUPABASE_URL.replace(/\/$/,'')}/rest/v1/subscriptions?${conditions}`;
       const res = await fetch(url, { method:'GET', headers: { 'apikey': SUPABASE_ANON_KEY, 'Authorization': `Bearer ${SUPABASE_ANON_KEY}` } });
