@@ -1,7 +1,40 @@
 (() => {
-  /* ------------------ Safe Supabase REST helper (whitelist fields) ------------------ */
+  // -------------------------
+  // Utilities (must be first)
+  // -------------------------
+  const qs = (s, r=document) => r.querySelector(s);
+  const qsa = (s, r=document) => Array.from(r.querySelectorAll(s));
+  const uid = () => 'id_' + Date.now() + '_' + Math.floor(Math.random()*9999);
+  const escapeHtml = s => String(s||'').replace(/[&<>"']/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
+  function toast(msg, type='info', t=3500){
+    let container = qs('#toasts');
+    if(!container){ container = document.createElement('div'); container.id = 'toasts'; document.body.appendChild(container); }
+    const box = document.createElement('div');
+    box.className = 'toast ' + type;
+    box.textContent = msg;
+    Object.assign(box.style, {padding:'10px 14px', borderRadius:'8px', color:'#fff', marginTop:'8px', fontWeight:700, zIndex:9999});
+    if(type==='success') box.style.background = 'linear-gradient(135deg,#2bb673,#1f8f5a)';
+    if(type==='error') box.style.background = 'linear-gradient(135deg,#e05b5b,#b13232)';
+    if(type==='info') box.style.background = 'linear-gradient(135deg,#4d4da9,#6a42f4)';
+    container.appendChild(box);
+    setTimeout(()=> box.remove(), t);
+  }
+
+  // -------------------------
+  // Local storage wrapper
+  // -------------------------
+  const STORAGE_PREFIX = 'enotifier_';
+  const LS = {
+    key(k){ return STORAGE_PREFIX + k; },
+    get(k){ try { return JSON.parse(localStorage.getItem(this.key(k))); } catch(e){ return null; } },
+    set(k,v){ localStorage.setItem(this.key(k), JSON.stringify(v)); },
+    remove(k){ localStorage.removeItem(this.key(k)); }
+  };
+
+  // -------------------------
+  // Supabase helper (fetch-based)
+  // -------------------------
   const SupabaseHelper = (function(){
-    // <-- REPLACE these with your project's values if needed (already set earlier in your file) -->
     const SUPABASE_URL = "https://ridhgyfcgmsevazuzkkb.supabase.co";
     const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InJpZGhneWZjZ21zZXZhenV6a2tiIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjQxMTMwMjEsImV4cCI6MjA3OTY4OTAyMX0.ajifKz-8Xgnp_PtNEcTGZviLhczA8WAlyti-rStvq9E";
 
@@ -56,7 +89,6 @@
       return out;
     }
 
-    // EVENTS
     async function fetchEvents({ onlyUpcoming=false, limit=1000 }={}) {
       const queryParts = [];
       if(onlyUpcoming){
@@ -119,7 +151,6 @@
       return true;
     }
 
-    // SUBSCRIPTIONS
     async function fetchSubscriptionsByEventName(eventName){
       const path = `subscriptions`;
       const q = `?event_name=eq.${encodeURIComponent(eventName)}&select=*`;
@@ -169,20 +200,19 @@
     };
   })();
 
-  /* ============= In-memory caches (pure Supabase flow) ============= */
-  let EVENTS_CACHE = [];      // array of event objects as returned by mapping
-  let SUBS_CACHE = [];        // cache of subscriptions for the current user
-
+  // -------------------------
+  // In-memory caches
+  // -------------------------
+  let EVENTS_CACHE = [];
+  let SUBS_CACHE = [];
   function getEvents(){ return EVENTS_CACHE; }
   function saveEvents(arr){ EVENTS_CACHE = Array.isArray(arr)?arr:[]; }
   function getSubs(){ return SUBS_CACHE; }
   function saveSubs(arr){ SUBS_CACHE = Array.isArray(arr)?arr:[]; }
 
-  // refreshEvents: use SupabaseHelper.fetchEvents and keep the same UI mapping as before
   async function refreshEvents(){
     try {
       const rows = await SupabaseHelper.fetchEvents({ onlyUpcoming:false, limit:1000 });
-      // SupabaseHelper returns mapped UI events already; ensure fields your UI expects exist
       saveEvents(rows.map(r => ({
         id: String(r.id),
         ownerId: r.ownerId,
@@ -195,7 +225,6 @@
         contactEmail: r.contactEmail || '',
         renewalEnabled: !!r.renewalEnabled,
         createdAt: r.createdAt || null,
-        // keep legacy flags (DB may not contain these; UI expects them)
         published: !!r.published,
         draft: !!r.draft,
         subscriberIds: r.subscriberIds || []
@@ -206,20 +235,15 @@
     }
   }
 
-  // refreshSubsForUser: use Supabase REST via SupabaseHelper._raw.api to run OR filter
   async function refreshSubsForUser(currentUserParam){
     if(!currentUserParam) { SUBS_CACHE = []; return []; }
     try {
       const email = currentUserParam.email || '';
       const ntid = currentUserParam.id || '';
-      // build or filter string as required by PostgREST
-      // NOTE: encodeURIComponent for email and ntid
       const cond = `or=(subscriber_NTID.eq.${encodeURIComponent(ntid)},susbscriber_email.eq.${encodeURIComponent(email)})&select=*`;
-      // use raw api helper
       const raw = SupabaseHelper._raw.api;
       const fullPath = `subscriptions?${cond}`;
       const data = await raw(fullPath, { method:'GET' });
-      // raw(...) returns JSON already (because api handles fetch)
       SUBS_CACHE = data || [];
       return SUBS_CACHE;
     } catch(e){
@@ -229,17 +253,11 @@
     }
   }
 
-  /* ---------------- The original UI logic with Supabase calls substituted ---------------- */
-
-  // --- Session & auth (NTID only) ---
+  // -------------------------
+  // UI logic (kept intact)
+  // -------------------------
   let currentUser = null;
-  const STORAGE_PREFIX = 'enotifier_';
-  const LS = {
-    key(k){ return STORAGE_PREFIX + k; },
-    get(k){ try { return JSON.parse(localStorage.getItem(this.key(k))); } catch(e){ return null; } },
-    set(k,v){ localStorage.setItem(this.key(k), JSON.stringify(v)); },
-    remove(k){ localStorage.removeItem(this.key(k)); }
-  };
+
   function setSession(u){ LS.set('session', u); currentUser = u; }
   function clearSession(){ LS.remove('session'); localStorage.removeItem(LS.key('remember_ntid')); currentUser = null; }
   function loadSession(){
@@ -252,7 +270,6 @@
     }
   }
 
-  // --- Date & status utilities ---
   function todayISO(){ return (new Date()).toISOString().slice(0,10); }
   function computeStatus(ev){
     const now = new Date();
@@ -264,7 +281,6 @@
     return 'upcoming';
   }
 
-  // --- Dashboard render (counts, lists) ---
   function renderDashboardCounts(){
     const events = getEvents();
     const myEvents = currentUser ? events.filter(e => e.ownerId === currentUser.id) : [];
@@ -313,7 +329,6 @@
     }
   }
 
-  // --- My Events rendering with Active / Drafts / Expired ---
   function renderOwnerEventsTabs(){
     const container = qs('#owner-events');
     if(!container) return;
@@ -360,7 +375,6 @@
     `;
   }
 
-  // delegation for owner events (single attach)
   function initOwnerEventsDelegation(){
     const container = qs('#owner-events');
     if(!container) return;
@@ -421,9 +435,7 @@
     if(idx === -1) { toast('Not found or unauthorized', 'error'); return; }
     const newPublished = !events[idx].published;
     try {
-      // Pass status to server; SupabaseHelper will ignore unknown cols (published/draft) if they don't exist
       await SupabaseHelper.updateEvent(id, { status: newPublished ? 'upcoming' : 'draft' });
-      // Update local flags by reloading from server and preserving UI fields (published/draft may be UI-only)
       await refreshEvents();
       toast(newPublished ? 'Published' : 'Unpublished', 'success');
       renderOwnerEventsTabs();
@@ -435,11 +447,10 @@
     }
   }
 
-  // --- Create form (guarded attach to avoid duplicates) ---
   function initCreateEventForm(){
     const form = qs('#create-event-form');
     if(!form) return;
-    if(form._createAttached) return; // guard
+    if(form._createAttached) return;
     form._createAttached = true;
 
     const saveDraftBtn = qs('#save-draft');
@@ -580,10 +591,11 @@
     };
   }
 
-  // --- Browse / subscribe ---
+  // Browse / subscribe etc. (kept intact)
   let browsePage = 1;
   const pageSize = 6;
   const loadMoreSize = 5;
+
   async function reloadBrowse(reset=true){
     if(reset) { browsePage = 1; const g = qs('#events-grid'); if(g) g.innerHTML=''; }
     const q = qs('#searchInput') ? qs('#searchInput').value.trim().toLowerCase() : '';
@@ -675,7 +687,6 @@
     reloadBrowse(true);
   }
 
-  // --- My subscriptions ---
   async function loadMySubscriptions(){
     const container = qs('#subscription-list');
     if(!container) return;
@@ -712,7 +723,6 @@
     }
   }
 
-  // --- Navigation and helpers ---
   function wireNav(){
     qsa('.nav-links a').forEach(a => a.addEventListener('click', (e) => { e.preventDefault(); showSection(a.dataset.target); }));
     qsa('.create-btn').forEach(b => b.addEventListener('click', ()=> showSection('create-event')));
@@ -756,7 +766,6 @@
     }));
   }
 
-  // --- Login flow ---
   function loginWithNTID(ntid, remember=false){
     if(!ntid) { toast('Enter NTID', 'error'); return; }
     let users = LS.get('users') || [];
@@ -794,7 +803,6 @@
     document.body.classList.add('login-active');
   }
 
-  // --- Boot/Wiring ---
   function initBrowseHandlers(){
     const s = qs('#searchInput'); if(s) s.addEventListener('input', debounce(()=> reloadBrowse(true), 300));
     const cat = qs('#categoryFilter'); if(cat) cat.addEventListener('change', ()=> reloadBrowse(true));
@@ -849,7 +857,6 @@
     wireMyEventTabs();
   }
 
-  // Correct view-all routing
   qsa('.panel-header .view-all').forEach(v => {
     v.addEventListener('click', e => {
       e.preventDefault();
@@ -859,7 +866,6 @@
     });
   });
 
-  // Profile dropdown toggle
   const pd = qs('#profile-dropdown');
   const pb = qs('#profile-btn');
   if(pb) {
@@ -872,7 +878,6 @@
 
   document.addEventListener('click', ()=> pd && pd.classList.add('hidden') );
 
-  // Logout
   const logoutBtn = qs('.logout-btn');
   if(logoutBtn) {
     logoutBtn.addEventListener('click', ()=>{
@@ -884,9 +889,7 @@
 
   document.addEventListener('DOMContentLoaded', () => { boot().catch(e => console.error('boot error', e)); });
 
-  // Expose debug helpers (adjusted to reflect current helpers)
-  window.EN = {
-     getEvents, saveEvents, getSubs, saveSubs, uid,
-     SupabaseHelper
-  };
+  // expose debug helpers
+  window.EN = { getEvents, saveEvents, getSubs, saveSubs, uid, SupabaseHelper };
+
 })(); // IIFE end
