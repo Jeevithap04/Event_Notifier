@@ -1,12 +1,30 @@
+/* ------------------------------------------------------------------
+   app.js - Supabase SDK v2 version (Option 3)
+   Uses @supabase/supabase-js v2 (UMD) to talk to Supabase.
+   NOTE: ensure you include the UMD script in index.html:
+   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
+   ------------------------------------------------------------------ */
+
+/* ========== Supabase config (already provided by you) ========== */
+const SUPABASE_URL = "https://ridhgyfcgmsevazuzkkb.supabase.co";
+const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InJpZGhneWZjZ21zZXZhenV6a2tiIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjQxMTMwMjEsImV4cCI6MjA3OTY4OTAyMX0.ajifKz-8Xgnp_PtNEcTGZviLhczA8WAlyti-rStvq9E";
+
+/* ========== IIFE to keep global scope clean ========== */
 (() => {
-  // -------------------------
-  // Utilities (must be first)
-  // -------------------------
+  const STORAGE_PREFIX = 'enotifier_';
+  const LS = {
+    key(k){ return STORAGE_PREFIX + k; },
+    get(k){ try { return JSON.parse(localStorage.getItem(this.key(k))); } catch(e){ return null; } },
+    set(k,v){ localStorage.setItem(this.key(k), JSON.stringify(v)); },
+    remove(k){ localStorage.removeItem(this.key(k)); }
+  };
+
+  // --- Utilities ---
   const qs = (s, r=document) => r.querySelector(s);
   const qsa = (s, r=document) => Array.from(r.querySelectorAll(s));
   const uid = () => 'id_' + Date.now() + '_' + Math.floor(Math.random()*9999);
   const escapeHtml = s => String(s||'').replace(/[&<>"']/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
-  function toast(msg, type='info', t=3500){f
+  function toast(msg, type='info', t=3500){
     let container = qs('#toasts');
     if(!container){ container = document.createElement('div'); container.id = 'toasts'; document.body.appendChild(container); }
     const box = document.createElement('div');
@@ -20,145 +38,94 @@
     setTimeout(()=> box.remove(), t);
   }
 
-  // -------------------------
-  // Local storage wrapper
-  // -------------------------
-  const STORAGE_PREFIX = 'enotifier_';
-  const LS = {
-    key(k){ return STORAGE_PREFIX + k; },
-    get(k){ try { return JSON.parse(localStorage.getItem(this.key(k))); } catch(e){ return null; } },
-    set(k,v){ localStorage.setItem(this.key(k), JSON.stringify(v)); },
-    remove(k){ localStorage.removeItem(this.key(k)); }
-  };
+  /* ---------------- Initialize Supabase SDK v2 ---------------- */
+  let supabaseClient = null;
+  function initSupabaseClient(){
+    if(supabaseClient) return supabaseClient;
 
-  // -------------------------
-  // Supabase helper (fetch-based)
-  // -------------------------
-  const SupabaseHelper = (function(){
-    const SUPABASE_URL = "https://ridhgyfcgmsevazuzkkb.supabase.co";
-    const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InJpZGhneWZjZ21zZXZhenV6a2tiIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjQxMTMwMjEsImV4cCI6MjA3OTY4OTAyMX0.ajifKz-8Xgnp_PtNEcTGZviLhczA8WAlyti-rStvq9E";
+    // pick createClient from global UMD: window.supabaseJs.createClient or window.supabase.createClient
+    const createClientFn = (window.supabaseJs && window.supabaseJs.createClient) || (window.supabase && window.supabase.createClient);
 
-    const EVENTS_FIELDS = ['user_id','event_name','startdate','enddate','status','tags','contact_email','renewal','created_at','description','location'];
-    const SUBS_FIELDS = ['event_name','susbscriber_email','subscriber_NTID','auto_renewal','created_at'];
-
-    async function api(path, opts = {}) {
-      const url = SUPABASE_URL.replace(/\/+$/,'') + '/rest/v1/' + path;
-      const headers = Object.assign({
-        'apikey': SUPABASE_ANON_KEY,
-        'Authorization': `Bearer ${SUPABASE_ANON_KEY}`,
-        'Content-Type': 'application/json',
-        'Accept': 'application/json'
-      }, opts.headers || {});
-      const res = await fetch(url + (opts.query||''), {
-        method: opts.method || 'GET',
-        headers,
-        body: opts.body ? JSON.stringify(opts.body) : undefined,
-      });
-      if(!res.ok){
-        const txt = await res.text().catch(()=> '');
-        const err = new Error(`Supabase REST error ${res.status}: ${txt}`);
-        err.status = res.status;
-        throw err;
-      }
-      const contentType = res.headers.get('content-type') || '';
-      if(contentType.includes('application/json')) return res.json();
-      return null;
+    if(!createClientFn){
+      // helpful error for developer
+      console.error('Supabase SDK not found. Add UMD script tag in index.html:\n<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>');
+      throw new Error('Supabase SDK not loaded. Add supabase-js UMD script to your HTML.');
     }
 
+    // Create client with persistSession disabled to avoid storage access (Tracking Prevention issues)
+    supabaseClient = createClientFn(SUPABASE_URL, SUPABASE_ANON_KEY, {
+      auth: {
+        persistSession: false,
+        detectSessionInUrl: false
+      }
+    });
+
+    return supabaseClient;
+  }
+
+  /* ---------------- Supabase SDK helper wrapper ---------------- */
+  const SupabaseHelper = (function(){
     function mapRowToUIEvent(r){
       return {
         id: String(r.id),
         ownerId: r.user_id,
         name: r.event_name || '',
         description: r.description || '',
-        startDate: r.startdate || '',
-        endDate: r.enddate || '',
+        startDate: r.startdate ? (new Date(r.startdate)).toISOString().slice(0,10) : '',
+        endDate: r.enddate ? (new Date(r.enddate)).toISOString().slice(0,10) : '',
         status: r.status || '',
-        tags: r.tags ? String(r.tags).split(',').map(s=>s.trim()).filter(Boolean) : [],
+        tags: r.tags ? (String(r.tags).split(',').map(s=>s.trim()).filter(Boolean)) : [],
         contactEmail: r.contact_email || '',
         renewalEnabled: !!r.renewal,
-        createdAt: r.created_at
+        createdAt: r.created_at,
+        published: !!r.published,
+        draft: !!r.draft
       };
     }
 
-    function pickAllowed(obj, allowed){
-      const out = {};
-      for(const k of allowed){
-        if(Object.prototype.hasOwnProperty.call(obj, k) && obj[k] !== undefined) out[k] = obj[k];
-      }
-      return out;
-    }
-
-    async function fetchEvents({ onlyUpcoming=false, limit=1000 }={}) {
-      const queryParts = [];
+    async function fetchEvents({ onlyUpcoming=false, limit=1000 } = {}){
+      const sb = initSupabaseClient();
+      let q = sb.from('Events').select('*').order('startdate', { ascending: true }).limit(limit);
       if(onlyUpcoming){
         const today = new Date().toISOString().slice(0,10);
-        queryParts.push(`startdate=gte.${encodeURIComponent(today)}`);
+        q = q.gte('startdate', today);
       }
-      queryParts.push(`select=${encodeURIComponent('*')}`);
-      queryParts.push(`order=startdate.asc`);
-      queryParts.push(`limit=${limit}`);
-      const q = '?' + queryParts.join('&');
-      const data = await api(`Events`, { method:'GET', query: q });
-      return (data || []).map(mapRowToUIEvent);
+      const { data, error } = await q;
+      if(error) throw error;
+      return (data||[]).map(mapRowToUIEvent);
     }
 
     async function createEvent(payload){
-      const row = pickAllowed({
-        user_id: payload.ownerId || payload.user_id || payload.NTID || '',
-        event_name: payload.name || payload.event_name || '',
-        startdate: payload.startDate || null,
-        enddate: payload.endDate || null,
-        status: payload.status || 'upcoming',
-        tags: Array.isArray(payload.tags) ? payload.tags.join(',') : (payload.tags||null),
-        contact_email: payload.contactEmail || payload.contact_email || '',
-        renewal: !!payload.renewalEnabled || !!payload.renew,
-        created_at: payload.createdAt || new Date().toISOString(),
-        description: payload.description,
-        location: payload.location
-      }, EVENTS_FIELDS);
-
-      const path = `Events?select=*`;
-      const headers = { 'Prefer': 'return=representation' };
-      const created = await api(path, { method:'POST', body: [row], headers });
-      return mapRowToUIEvent((created && created[0]) || created);
+      const sb = initSupabaseClient();
+      // payload expected: DB column names
+      const { data, error } = await sb.from('Events').insert([payload]).select().single();
+      if(error) throw error;
+      return mapRowToUIEvent(data);
     }
 
     async function updateEvent(id, payload){
-      const candidate = {
-        event_name: payload.name,
-        startdate: payload.startDate,
-        enddate: payload.endDate,
-        status: payload.status,
-        tags: Array.isArray(payload.tags) ? payload.tags.join(',') : payload.tags,
-        contact_email: payload.contactEmail,
-        renewal: payload.renewalEnabled,
-        description: payload.description,
-        location: payload.location
-      };
-      const row = pickAllowed(candidate, EVENTS_FIELDS);
-      const path = `Events`;
-      const query = `?id=eq.${encodeURIComponent(id)}&select=*`;
-      const headers = { 'Prefer': 'return=representation' };
-      const updated = await api(path, { method:'PATCH', query, body: row, headers });
-      return mapRowToUIEvent((updated && updated[0]) || updated);
+      const sb = initSupabaseClient();
+      const { data, error } = await sb.from('Events').update(payload).eq('id', id).select().single();
+      if(error) throw error;
+      return mapRowToUIEvent(data);
     }
 
     async function deleteEvent(id){
-      const path = `Events`;
-      const query = `?id=eq.${encodeURIComponent(id)}`;
-      await api(path, { method:'DELETE', query });
+      const sb = initSupabaseClient();
+      const { error } = await sb.from('Events').delete().eq('id', id);
+      if(error) throw error;
       return true;
     }
 
+    // SUBSCRIPTIONS
     async function fetchSubscriptionsByEventName(eventName){
-      const path = `subscriptions`;
-      const q = `?event_name=eq.${encodeURIComponent(eventName)}&select=*`;
-      const data = await api(path, { method:'GET', query: q });
-      return (data || []).map(s => ({
+      const sb = initSupabaseClient();
+      const { data, error } = await sb.from('subscriptions').select('*').eq('event_name', eventName);
+      if(error) throw error;
+      return (data||[]).map(s => ({
         id: String(s.id),
         event_name: s.event_name,
-        subscriber_email: s.susbscriber_email,
+        subscriber_email: s.subscriber_email,
         subscriber_NTID: s.subscriber_NTID,
         auto_renewal: !!s.auto_renewal,
         created_at: s.created_at
@@ -166,29 +133,42 @@
     }
 
     async function subscribeByEventName({ event_name, subscriber_email, subscriber_NTID=null, auto_renewal=true }){
-      const existing = await fetchSubscriptionsByEventName(event_name);
-      if(existing.some(x => x.subscriber_email && x.subscriber_email.toLowerCase() === (subscriber_email||'').toLowerCase())) return existing.find(x => x.subscriber_email.toLowerCase() === subscriber_email.toLowerCase());
-      const row = pickAllowed({
+      const sb = initSupabaseClient();
+      const payload = {
         event_name,
-        susbscriber_email: subscriber_email,
+        subscriber_email,
         subscriber_NTID,
         auto_renewal,
         created_at: new Date().toISOString()
-      }, SUBS_FIELDS);
-      const path = `subscriptions?select=*`;
-      const headers = { 'Prefer': 'return=representation' };
-      const created = await api(path, { method:'POST', body: [row], headers });
-      return (created && created[0]) || created;
-    }
-
-    async function unsubscribeByEmail(event_name, subscriber_email){
-      const path = `subscriptions`;
-      const query = `?event_name=eq.${encodeURIComponent(event_name)}&susbscriber_email=eq.${encodeURIComponent(subscriber_email)}`;
-      const data = await api(path, { method:'DELETE', query });
+      };
+      const { data, error } = await sb.from('subscriptions').insert([payload]).select().single();
+      if(error) throw error;
       return data;
     }
 
+    async function unsubscribeByEmail(event_name, subscriber_email){
+      const sb = initSupabaseClient();
+      // find subs
+      const { data: subs, error: err1 } = await sb.from('subscriptions').select('id,subscriber_email').eq('event_name', event_name).in('subscriber_email', [subscriber_email]);
+      if(err1) throw err1;
+      if(!subs || subs.length === 0) return [];
+      const ids = subs.map(s => s.id);
+      const { data, error } = await sb.from('subscriptions').delete().in('id', ids).select();
+      if(error) throw error;
+      return data;
+    }
+
+    // fetch subscriptions for current user by NTID or email (returns array)
+    async function fetchSubscriptionsForUserNTIDOrEmail(ntid, email){
+      const sb = initSupabaseClient();
+      // use or filter
+      const { data, error } = await sb.from('subscriptions').select('*').or(`subscriber_NTID.eq.${ntid},subscriber_email.eq.${email}`);
+      if(error) throw error;
+      return data || [];
+    }
+
     return {
+      init: initSupabaseClient,
       fetchEvents,
       createEvent,
       updateEvent,
@@ -196,55 +176,35 @@
       fetchSubscriptionsByEventName,
       subscribeByEventName,
       unsubscribeByEmail,
-      _raw: { api, SUPABASE_URL, SUPABASE_ANON_KEY }
+      fetchSubscriptionsForUserNTIDOrEmail,
+      _raw: () => initSupabaseClient()
     };
   })();
 
-  // -------------------------
-  // In-memory caches
-  // -------------------------
+  /* ============= In-memory caches ============= */
   let EVENTS_CACHE = [];
   let SUBS_CACHE = [];
+
   function getEvents(){ return EVENTS_CACHE; }
   function saveEvents(arr){ EVENTS_CACHE = Array.isArray(arr)?arr:[]; }
-  function getSubs(){ return SUBS_CACHE; }
-  function saveSubs(arr){ SUBS_CACHE = Array.isArray(arr)?arr:[]; }
-
   async function refreshEvents(){
     try {
       const rows = await SupabaseHelper.fetchEvents({ onlyUpcoming:false, limit:1000 });
-      saveEvents(rows.map(r => ({
-        id: String(r.id),
-        ownerId: r.ownerId,
-        name: r.name || '',
-        description: r.description || '',
-        startDate: r.startDate ? (new Date(r.startDate)).toISOString().slice(0,10) : '',
-        endDate: r.endDate ? (new Date(r.endDate)).toISOString().slice(0,10) : '',
-        status: r.status || '',
-        tags: r.tags || [],
-        contactEmail: r.contactEmail || '',
-        renewalEnabled: !!r.renewalEnabled,
-        createdAt: r.createdAt || null,
-        published: !!r.published,
-        draft: !!r.draft,
-        subscriberIds: r.subscriberIds || []
-      })));
+      saveEvents(rows);
     } catch(e){
       console.error('refreshEvents error', e);
       EVENTS_CACHE = [];
+      throw e;
     }
   }
 
   async function refreshSubsForUser(currentUserParam){
     if(!currentUserParam) { SUBS_CACHE = []; return []; }
     try {
-      const email = currentUserParam.email || '';
       const ntid = currentUserParam.id || '';
-      const cond = `or=(subscriber_NTID.eq.${encodeURIComponent(ntid)},susbscriber_email.eq.${encodeURIComponent(email)})&select=*`;
-      const raw = SupabaseHelper._raw.api;
-      const fullPath = `subscriptions?${cond}`;
-      const data = await raw(fullPath, { method:'GET' });
-      SUBS_CACHE = data || [];
+      const email = currentUserParam.email || '';
+      const rows = await SupabaseHelper.fetchSubscriptionsForUserNTIDOrEmail(ntid, email);
+      SUBS_CACHE = rows;
       return SUBS_CACHE;
     } catch(e){
       console.error('refreshSubsForUser error', e);
@@ -253,11 +213,10 @@
     }
   }
 
-  // -------------------------
-  // UI logic (kept intact)
-  // -------------------------
-  let currentUser = null;
+  /* ---------------- The UI logic (keeps your existing flow) ---------------- */
 
+  // --- Session & auth (NTID only) ---
+  let currentUser = null;
   function setSession(u){ LS.set('session', u); currentUser = u; }
   function clearSession(){ LS.remove('session'); localStorage.removeItem(LS.key('remember_ntid')); currentUser = null; }
   function loadSession(){
@@ -270,6 +229,7 @@
     }
   }
 
+  // --- Date & status utilities ---
   function todayISO(){ return (new Date()).toISOString().slice(0,10); }
   function computeStatus(ev){
     const now = new Date();
@@ -281,6 +241,7 @@
     return 'upcoming';
   }
 
+  // --- Dashboard render (counts, lists) ---
   function renderDashboardCounts(){
     const events = getEvents();
     const myEvents = currentUser ? events.filter(e => e.ownerId === currentUser.id) : [];
@@ -297,6 +258,7 @@
     if(qs('#hero-active-events')) qs('#hero-active-events').textContent = published.length;
     if(qs('#hero-subscribed-events')) qs('#hero-subscribed-events').textContent = subs.length;
 
+    // Upcoming renewals list
     const ur = qs('#upcoming-renewals');
     if(ur){
       ur.innerHTML = '';
@@ -314,6 +276,7 @@
       });
     }
 
+    // Recent subscriptions list
     const rs = qs('#recent-subs');
     if(rs){
       rs.innerHTML = '';
@@ -329,6 +292,7 @@
     }
   }
 
+  // --- My Events rendering with Active / Drafts / Expired ---
   function renderOwnerEventsTabs(){
     const container = qs('#owner-events');
     if(!container) return;
@@ -375,6 +339,7 @@
     `;
   }
 
+  // delegation for owner events (single attach)
   function initOwnerEventsDelegation(){
     const container = qs('#owner-events');
     if(!container) return;
@@ -435,7 +400,7 @@
     if(idx === -1) { toast('Not found or unauthorized', 'error'); return; }
     const newPublished = !events[idx].published;
     try {
-      await SupabaseHelper.updateEvent(id, { status: newPublished ? 'upcoming' : 'draft' });
+      await SupabaseHelper.updateEvent(id, { published: newPublished, draft: !newPublished, status: newPublished ? 'upcoming' : 'draft' });
       await refreshEvents();
       toast(newPublished ? 'Published' : 'Unpublished', 'success');
       renderOwnerEventsTabs();
@@ -447,6 +412,7 @@
     }
   }
 
+  // --- Create form ---
   function initCreateEventForm(){
     const form = qs('#create-event-form');
     if(!form) return;
@@ -483,33 +449,29 @@
       const payload = gatherFormData();
       const editing = sessionStorage.getItem('editing_event');
       try {
+        // Build DB payload (map client keys to DB columns)
+        const dbPayload = {
+          user_id: currentUser.id,
+          event_name: payload.name,
+          description: payload.description || null,
+          startdate: payload.startDate || null,
+          enddate: payload.endDate || null,
+          contact_email: payload.contactEmail,
+          tags: payload.tags.join ? payload.tags.join(',') : payload.tags,
+          renewal: !!payload.renewalEnabled,
+          status: 'draft',
+          published: false,
+          draft: true,
+          location: payload.location || null,
+          created_at: new Date().toISOString()
+        };
+
         if(editing){
-          await SupabaseHelper.updateEvent(editing, {
-            name: payload.name,
-            description: payload.description,
-            startDate: payload.startDate || null,
-            endDate: payload.endDate || null,
-            contactEmail: payload.contactEmail,
-            tags: payload.tags.join ? payload.tags.join(',') : payload.tags,
-            renewalEnabled: !!payload.renewalEnabled,
-            status: 'draft'
-          });
+          await SupabaseHelper.updateEvent(editing, dbPayload);
           sessionStorage.removeItem('editing_event');
           toast('Draft updated (saved to server)', 'success');
         } else {
-          await SupabaseHelper.createEvent({
-            ownerId: currentUser.id,
-            name: payload.name,
-            description: payload.description,
-            startDate: payload.startDate || null,
-            endDate: payload.endDate || null,
-            contactEmail: payload.contactEmail,
-            tags: payload.tags.join ? payload.tags.join(',') : payload.tags,
-            renewalEnabled: !!payload.renewalEnabled,
-            status: 'draft',
-            createdAt: new Date().toISOString(),
-            location: payload.location
-          });
+          await SupabaseHelper.createEvent(dbPayload);
           toast('Draft saved (server)', 'success');
         }
         await refreshEvents();
@@ -535,33 +497,28 @@
       const payload = gatherFormData();
       const editing = sessionStorage.getItem('editing_event');
       try {
+        const dbPayload = {
+          user_id: currentUser.id,
+          event_name: payload.name,
+          description: payload.description || null,
+          startdate: payload.startDate || null,
+          enddate: payload.endDate || null,
+          contact_email: payload.contactEmail,
+          tags: payload.tags.join ? payload.tags.join(',') : payload.tags,
+          renewal: !!payload.renewalEnabled,
+          status: 'upcoming',
+          published: true,
+          draft: false,
+          location: payload.location || null,
+          created_at: new Date().toISOString()
+        };
+
         if(editing){
-          await SupabaseHelper.updateEvent(editing, {
-            name: payload.name,
-            description: payload.description,
-            startDate: payload.startDate || null,
-            endDate: payload.endDate || null,
-            contactEmail: payload.contactEmail,
-            tags: payload.tags.join ? payload.tags.join(',') : payload.tags,
-            renewalEnabled: !!payload.renewalEnabled,
-            status: 'upcoming'
-          });
+          await SupabaseHelper.updateEvent(editing, dbPayload);
           sessionStorage.removeItem('editing_event');
           toast('Event updated & published', 'success');
         } else {
-          await SupabaseHelper.createEvent({
-            ownerId: currentUser.id,
-            name: payload.name,
-            description: payload.description,
-            startDate: payload.startDate || null,
-            endDate: payload.endDate || null,
-            contactEmail: payload.contactEmail,
-            tags: payload.tags.join ? payload.tags.join(',') : payload.tags,
-            renewalEnabled: !!payload.renewalEnabled,
-            status: 'upcoming',
-            createdAt: new Date().toISOString(),
-            location: payload.location
-          });
+          await SupabaseHelper.createEvent(dbPayload);
           toast('Event published', 'success');
         }
         await refreshEvents();
@@ -591,11 +548,10 @@
     };
   }
 
-  // Browse / subscribe etc. (kept intact)
+  // --- Browse / subscribe ---
   let browsePage = 1;
   const pageSize = 6;
   const loadMoreSize = 5;
-
   async function reloadBrowse(reset=true){
     if(reset) { browsePage = 1; const g = qs('#events-grid'); if(g) g.innerHTML=''; }
     const q = qs('#searchInput') ? qs('#searchInput').value.trim().toLowerCase() : '';
@@ -687,6 +643,7 @@
     reloadBrowse(true);
   }
 
+  // --- My subscriptions ---
   async function loadMySubscriptions(){
     const container = qs('#subscription-list');
     if(!container) return;
@@ -723,6 +680,7 @@
     }
   }
 
+  // --- Navigation and helpers ---
   function wireNav(){
     qsa('.nav-links a').forEach(a => a.addEventListener('click', (e) => { e.preventDefault(); showSection(a.dataset.target); }));
     qsa('.create-btn').forEach(b => b.addEventListener('click', ()=> showSection('create-event')));
@@ -730,6 +688,7 @@
     if(profile) profile.addEventListener('click', ()=> { if(confirm('Logout?')) { logoutFlow(); } });
   }
 
+  // showSection ensures dashboard scrolls to top
   function showSection(id){
     qsa('section').forEach(s => s.classList.remove('active'));
     const sec = qs('#' + id);
@@ -766,6 +725,7 @@
     }));
   }
 
+  // --- Login flow ---
   function loginWithNTID(ntid, remember=false){
     if(!ntid) { toast('Enter NTID', 'error'); return; }
     let users = LS.get('users') || [];
@@ -786,6 +746,7 @@
     showSection('dashboard');
     window.scrollTo({ top: 0, behavior: 'instant' });
 
+    // initialize data from server
     (async () => {
       try { await refreshEvents(); } catch(e){ console.warn('refreshEvents login:', e); }
       try { await refreshSubsForUser(currentUser); } catch(e){ console.warn('refreshSubsForUser login:', e); }
@@ -803,6 +764,7 @@
     document.body.classList.add('login-active');
   }
 
+  // --- Boot/Wiring ---
   function initBrowseHandlers(){
     const s = qs('#searchInput'); if(s) s.addEventListener('input', debounce(()=> reloadBrowse(true), 300));
     const cat = qs('#categoryFilter'); if(cat) cat.addEventListener('change', ()=> reloadBrowse(true));
@@ -823,13 +785,16 @@
   function debounce(fn, t=200){ let to=null; return (...a)=>{ clearTimeout(to); to=setTimeout(()=>fn(...a), t); }; }
 
   async function boot(){
+    // seed users only
     if(!LS.get('users')) LS.set('users', [{ id:'u_demo', ntid:'demo', displayName:'demo', email:'demo@Bosch.in' }]);
     loadSession();
 
+    // if remembered NTID -> auto login
     const rem = localStorage.getItem(LS.key('remember_ntid'));
     if(rem && !currentUser) { loginWithNTID(rem, true); return; }
 
     if(currentUser){
+      // fetch server data
       try { await refreshEvents(); } catch(e){ console.warn('initial refreshEvents', e); }
       try { await refreshSubsForUser(currentUser); } catch(e){ console.warn('initial refreshSubsForUser', e); }
 
@@ -847,6 +812,7 @@
       document.body.classList.add('login-active');
     }
 
+    // login button
     const loginBtn = qs('#login-btn');
     if(loginBtn) loginBtn.addEventListener('click', (e)=> { e.preventDefault(); const ntid = qs('#ntid').value.trim(); const remember = !!qs('#remember').checked; if(!ntid) return toast('Please enter NTID', 'error'); loginWithNTID(ntid, remember); });
 
@@ -857,15 +823,23 @@
     wireMyEventTabs();
   }
 
+  // Correct view-all routing
   qsa('.panel-header .view-all').forEach(v => {
     v.addEventListener('click', e => {
       e.preventDefault();
       const type = v.dataset.open;
-      if (type === 'renewals') showSection('my-event');
-      if (type === 'recent-subs') showSection('my-subscription');
+
+      if (type === 'renewals') {
+        showSection('my-event');   // Upcoming Renewals → My Event
+      }
+
+      if (type === 'recent-subs') {
+        showSection('my-subscription');  // Recent Subscriptions → My Subscription
+      }
     });
   });
 
+  // Profile dropdown toggle
   const pd = qs('#profile-dropdown');
   const pb = qs('#profile-btn');
   if(pb) {
@@ -876,8 +850,10 @@
     });
   }
 
+  // Hide when clicking outside
   document.addEventListener('click', ()=> pd && pd.classList.add('hidden') );
 
+  // Logout
   const logoutBtn = qs('.logout-btn');
   if(logoutBtn) {
     logoutBtn.addEventListener('click', ()=>{
@@ -889,8 +865,10 @@
 
   document.addEventListener('DOMContentLoaded', () => { boot().catch(e => console.error('boot error', e)); });
 
-  // expose debug helpers
-  window.EN = { getEvents, saveEvents, getSubs, saveSubs, uid, SupabaseHelper };
+  // Expose debug helpers
+  window.EN = {
+    refreshEvents, refreshSubsForUser, getEvents,
+    SupabaseHelper
+  };
 
 })(); // IIFE end
-
