@@ -1121,11 +1121,6 @@ const SupabaseHelper = (function(){
   // Supabase REST helper (fetch-based)
      SupabaseHelper    // use SupabaseHelper.fetchEvents(), .createEvent(), etc.
    };
-
-
-})(); // IIFE end
-
-
-
+)(); // IIFE end
 
 
