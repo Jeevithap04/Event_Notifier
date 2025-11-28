@@ -1,191 +1,160 @@
-/* ------------------------------------------------------------------
-   app.js - Supabase REST version (Option A)
-   Replaces localStorage events/subscriptions with Supabase REST calls.
-   Keep session/users in localStorage (NTID).
-   ------------------------------------------------------------------ */
-
-/* ========== Supabase REST config ========== */
-/*const SUPABASE_URL = "https://ridhgyfcgmsevazuzkkb.supabase.co";      // << REPLACE
-const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InJpZGhneWZjZ21zZXZhenV6a2tiIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjQxMTMwMjEsImV4cCI6MjA3OTY4OTAyMX0.ajifKz-8Xgnp_PtNEcTGZviLhczA8WAlyti-rStvq9E";                   // << REPLACE
-
 (() => {
-  const STORAGE_PREFIX = 'enotifier_';
-  const LS = {
-    key(k){ return STORAGE_PREFIX + k; },
-    get(k){ try { return JSON.parse(localStorage.getItem(this.key(k))); } catch(e){ return null; } },
-    set(k,v){ localStorage.setItem(this.key(k), JSON.stringify(v)); },
-    remove(k){ localStorage.removeItem(this.key(k)); }
-  };
+  /* ------------------ Safe Supabase REST helper (whitelist fields) ------------------ */
+  const SupabaseHelper = (function(){
+    // <-- REPLACE these with your project's values if needed (already set earlier in your file) -->
+    const SUPABASE_URL = "https://ridhgyfcgmsevazuzkkb.supabase.co";
+    const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InJpZGhneWZjZ21zZXZhenV6a2tiIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjQxMTMwMjEsImV4cCI6MjA3OTY4OTAyMX0.ajifKz-8Xgnp_PtNEcTGZviLhczA8WAlyti-rStvq9E";
 
-  // --- Utilities ---
-  const qs = (s, r=document) => r.querySelector(s);
-  const qsa = (s, r=document) => Array.from(r.querySelectorAll(s));
-  const uid = () => 'id_' + Date.now() + '_' + Math.floor(Math.random()*9999);
-  const escapeHtml = s => String(s||'').replace(/[&<>"']/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
-  function toast(msg, type='info', t=3500){
-    // ensure container exists
-    let container = qs('#toasts');
-    if(!container){ container = document.createElement('div'); container.id = 'toasts'; document.body.appendChild(container); }
-    const box = document.createElement('div');
-    box.className = 'toast ' + type;
-    box.textContent = msg;
-    Object.assign(box.style, {padding:'10px 14px', borderRadius:'8px', color:'#fff', marginTop:'8px', fontWeight:700, zIndex:9999});
-    if(type==='success') box.style.background = 'linear-gradient(135deg,#2bb673,#1f8f5a)';
-    if(type==='error') box.style.background = 'linear-gradient(135deg,#e05b5b,#b13232)';
-    if(type==='info') box.style.background = 'linear-gradient(135deg,#4d4da9,#6a42f4)';
-    container.appendChild(box);
-    setTimeout(()=> box.remove(), t);
-  }*/
+    const EVENTS_FIELDS = ['user_id','event_name','startdate','enddate','status','tags','contact_email','renewal','created_at','description','location'];
+    const SUBS_FIELDS = ['event_name','susbscriber_email','subscriber_NTID','auto_renewal','created_at'];
 
-  /* ---------------- Supabase REST helper ---------------- */
-  /*const SupabaseRest = (function(){
-    if(!SUPABASE_URL || !SUPABASE_ANON_KEY){
-      console.warn('Supabase REST placeholders not replaced yet.');
-    }
-
-    function headers(additional = {}){
-      return Object.assign({
+    async function api(path, opts = {}) {
+      const url = SUPABASE_URL.replace(/\/+$/,'') + '/rest/v1/' + path;
+      const headers = Object.assign({
         'apikey': SUPABASE_ANON_KEY,
         'Authorization': `Bearer ${SUPABASE_ANON_KEY}`,
-        'Content-Type': 'application/json'
-      }, additional);
-    }*/
-
-    /**
-     * request(path, method='GET', body=null, params='')
-     * - params is the raw query-string-like string (e.g. 'select=*&limit=10' OR '?select=*&limit=10')
-     * - if params contains any prefer=... tokens they will be converted into Prefer headers (and removed from the URL)
-     */
-    /*async function request(path, method='GET', body=null, params=''){
-      // normalize params string
-      let paramStr = String(params||'').trim();
-      if(paramStr.startsWith('?')) paramStr = paramStr.slice(1);
-
-      // collect Prefer header(s) from params if present and remove them from query
-      const preferHeaders = [];
-      let leftoverParts = [];
-      if(paramStr.length){
-        const parts = paramStr.split('&').map(p => p.trim()).filter(Boolean);
-        parts.forEach(p => {
-          const [k, ...rest] = p.split('=');
-          const key = (k||'').trim();
-          const val = (rest || []).join('=');
-          if(key.toLowerCase() === 'prefer'){
-            preferHeaders.push(val);
-          } else {
-            leftoverParts.push(p);
-          }
-        });
-      }
-
-      // rebuild final url
-      const query = leftoverParts.length ? ('?' + leftoverParts.join('&')) : '';
-      const url = `${SUPABASE_URL.replace(/\/$/,'')}/rest/v1/${path}${query}`;
-
-      // prepare options and headers
-      const extraHeaders = {};
-      if(preferHeaders.length){
-        // join multiple prefer tokens into one header if necessary
-        extraHeaders['Prefer'] = preferHeaders.join(',');
-      }
-      const opts = { method, headers: headers(extraHeaders) };
-      if(body !== null) opts.body = JSON.stringify(body);
-
-      // execute
-      const res = await fetch(url, opts);
-      const ct = res.headers.get('content-type') || '';
-      let data = null;
-      if(ct.includes('application/json')) data = await res.json();
-      else data = await res.text();
+        'Content-Type': 'application/json',
+        'Accept': 'application/json'
+      }, opts.headers || {});
+      const res = await fetch(url + (opts.query||''), {
+        method: opts.method || 'GET',
+        headers,
+        body: opts.body ? JSON.stringify(opts.body) : undefined,
+      });
       if(!res.ok){
-        const msg = (data && data.message) ? data.message : (typeof data === 'string' ? data : JSON.stringify(data));
-        const err = new Error(`Supabase REST error ${res.status}: ${msg}`);
-        err.status = res.status; err.body = data;
+        const txt = await res.text().catch(()=> '');
+        const err = new Error(`Supabase REST error ${res.status}: ${txt}`);
+        err.status = res.status;
         throw err;
       }
-      return data;
+      const contentType = res.headers.get('content-type') || '';
+      if(contentType.includes('application/json')) return res.json();
+      return null;
     }
 
-    // Events
-    async function fetchEvents({ onlyUpcoming=false, limit=1000 } = {}){
-      // select all columns
-      let params = `select=*&order=startdate.asc&limit=${limit}`;
+    function mapRowToUIEvent(r){
+      return {
+        id: String(r.id),
+        ownerId: r.user_id,
+        name: r.event_name || '',
+        description: r.description || '',
+        startDate: r.startdate || '',
+        endDate: r.enddate || '',
+        status: r.status || '',
+        tags: r.tags ? String(r.tags).split(',').map(s=>s.trim()).filter(Boolean) : [],
+        contactEmail: r.contact_email || '',
+        renewalEnabled: !!r.renewal,
+        createdAt: r.created_at
+      };
+    }
+
+    function pickAllowed(obj, allowed){
+      const out = {};
+      for(const k of allowed){
+        if(Object.prototype.hasOwnProperty.call(obj, k) && obj[k] !== undefined) out[k] = obj[k];
+      }
+      return out;
+    }
+
+    // EVENTS
+    async function fetchEvents({ onlyUpcoming=false, limit=1000 }={}) {
+      const queryParts = [];
       if(onlyUpcoming){
         const today = new Date().toISOString().slice(0,10);
-        // When building query filters for dates, Supabase expects them as query params rather than appended
-        // but we will keep filtering client-side for consistency; however keep param for server-side filtering if desired
-        params += `&startdate=gte.${today}`;
+        queryParts.push(`startdate=gte.${encodeURIComponent(today)}`);
       }
-      return await request('Events', 'GET', null, params);
+      queryParts.push(`select=${encodeURIComponent('*')}`);
+      queryParts.push(`order=startdate.asc`);
+      queryParts.push(`limit=${limit}`);
+      const q = '?' + queryParts.join('&');
+      const data = await api(`"Events"`, { method:'GET', query: q });
+      return (data || []).map(mapRowToUIEvent);
     }
 
     async function createEvent(payload){
-      // prefer returning representation -> use Prefer header (the request helper will accept 'prefer=return=representation' if passed as params)
-      // but calling request with params 'prefer=return=representation' will now set Prefer header correctly (not a query filter).
-      const opts = { ...payload };
-      const data = await request('Events', 'POST', [opts], 'prefer=return=representation');
-      // Supabase returns array representation; return first
-      return Array.isArray(data) ? data[0] : data;
+      const row = pickAllowed({
+        user_id: payload.ownerId || payload.user_id || payload.NTID || '',
+        event_name: payload.name || payload.event_name || '',
+        startdate: payload.startDate || null,
+        enddate: payload.endDate || null,
+        status: payload.status || 'upcoming',
+        tags: Array.isArray(payload.tags) ? payload.tags.join(',') : (payload.tags||null),
+        contact_email: payload.contactEmail || payload.contact_email || '',
+        renewal: !!payload.renewalEnabled || !!payload.renew,
+        created_at: payload.createdAt || new Date().toISOString(),
+        description: payload.description,
+        location: payload.location
+      }, EVENTS_FIELDS);
+
+      const path = `"Events"?select=*`;
+      const headers = { 'Prefer': 'return=representation' };
+      const created = await api(path, { method:'POST', body: [row], headers });
+      return mapRowToUIEvent((created && created[0]) || created);
     }
 
     async function updateEvent(id, payload){
-      // patch by id using PATCH and Prefer header for representation
-      const url = `${SUPABASE_URL.replace(/\/$/,'')}/rest/v1/Events?id=eq.${encodeURIComponent(id)}`;
-      const res = await fetch(url, { method:'PATCH', headers: headers({ 'Prefer':'return=representation' }), body: JSON.stringify(payload) });
-      const ct = res.headers.get('content-type') || '';
-      const data = ct.includes('application/json') ? await res.json() : await res.text();
-      if(!res.ok){
-        const msg = (data && data.message) ? data.message : (typeof data === 'string' ? data : JSON.stringify(data));
-        const err = new Error(`Supabase REST update error ${res.status}: ${msg}`);
-        err.status = res.status; err.body = data;
-        throw err;
-      }
-      // returns array
-      return Array.isArray(data) ? data[0] : data;
+      const candidate = {
+        event_name: payload.name,
+        startdate: payload.startDate,
+        enddate: payload.endDate,
+        status: payload.status,
+        tags: Array.isArray(payload.tags) ? payload.tags.join(',') : payload.tags,
+        contact_email: payload.contactEmail,
+        renewal: payload.renewalEnabled,
+        description: payload.description,
+        location: payload.location
+      };
+      const row = pickAllowed(candidate, EVENTS_FIELDS);
+      const path = `"Events"`;
+      const query = `?id=eq.${encodeURIComponent(id)}&select=*`;
+      const headers = { 'Prefer': 'return=representation' };
+      const updated = await api(path, { method:'PATCH', query, body: row, headers });
+      return mapRowToUIEvent((updated && updated[0]) || updated);
     }
 
     async function deleteEvent(id){
-      const url = `${SUPABASE_URL.replace(/\/$/,'')}/rest/v1/Events?id=eq.${encodeURIComponent(id)}`;
-      const res = await fetch(url, { method:'DELETE', headers: headers() });
-      if(!res.ok){
-        const txt = await res.text().catch(()=>null);
-        throw new Error('Delete failed: ' + res.status + ' ' + txt);
-      }
+      const path = `"Events"`;
+      const query = `?id=eq.${encodeURIComponent(id)}`;
+      await api(path, { method:'DELETE', query });
       return true;
     }
 
-    // Subscriptions
+    // SUBSCRIPTIONS
     async function fetchSubscriptionsByEventName(eventName){
-      const q = `select=*&event_name=eq.${encodeURIComponent(eventName)}`;
-      return await request('subscriptions', 'GET', null, q);
+      const path = `subscriptions`;
+      const q = `?event_name=eq.${encodeURIComponent(eventName)}&select=*`;
+      const data = await api(path, { method:'GET', query: q });
+      return (data || []).map(s => ({
+        id: String(s.id),
+        event_name: s.event_name,
+        subscriber_email: s.susbscriber_email,
+        subscriber_NTID: s.subscriber_NTID,
+        auto_renewal: !!s.auto_renewal,
+        created_at: s.created_at
+      }));
     }
 
     async function subscribeByEventName({ event_name, subscriber_email, subscriber_NTID=null, auto_renewal=true }){
-      const payload = {
+      const existing = await fetchSubscriptionsByEventName(event_name);
+      if(existing.some(x => x.subscriber_email && x.subscriber_email.toLowerCase() === (subscriber_email||'').toLowerCase())) return existing.find(x => x.subscriber_email.toLowerCase() === subscriber_email.toLowerCase());
+      const row = pickAllowed({
         event_name,
-        subscriber_email,
+        susbscriber_email: subscriber_email,
         subscriber_NTID,
         auto_renewal,
         created_at: new Date().toISOString()
-      };
-      const data = await request('subscriptions', 'POST', [payload], 'prefer=return=representation');
-      return Array.isArray(data) ? data[0] : data;
+      }, SUBS_FIELDS);
+      const path = `subscriptions?select=*`;
+      const headers = { 'Prefer': 'return=representation' };
+      const created = await api(path, { method:'POST', body: [row], headers });
+      return (created && created[0]) || created;
     }
 
     async function unsubscribeByEmail(event_name, subscriber_email){
-      // find matching subscription ids then delete by id
-      const subs = await fetchSubscriptionsByEventName(event_name);
-      const toDelete = subs.filter(s => (s.subscriber_email && s.subscriber_email.toLowerCase() === String(subscriber_email||'').toLowerCase()));
-      if(toDelete.length === 0) return [];
-      const ids = toDelete.map(d => d.id);
-      // delete by id eq.in.
-      const url = `${SUPABASE_URL.replace(/\/$/,'')}/rest/v1/subscriptions?id=in.(${ids.map(i=>encodeURIComponent(i)).join(',')})`;
-      const res = await fetch(url, { method:'DELETE', headers: headers() });
-      if(!res.ok){
-        const txt = await res.text().catch(()=>null);
-        throw new Error('Unsubscribe failed: ' + res.status + ' ' + txt);
-      }
-      return toDelete;
+      const path = `subscriptions`;
+      const query = `?event_name=eq.${encodeURIComponent(event_name)}&susbscriber_email=eq.${encodeURIComponent(subscriber_email)}`;
+      const data = await api(path, { method:'DELETE', query });
+      return data;
     }
 
     return {
@@ -195,207 +164,38 @@ const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBh
       deleteEvent,
       fetchSubscriptionsByEventName,
       subscribeByEventName,
-      unsubscribeByEmail
+      unsubscribeByEmail,
+      _raw: { api, SUPABASE_URL, SUPABASE_ANON_KEY }
     };
-  })();*/
-
-   /* ------------------ Safe Supabase REST helper (whitelist fields) ------------------
-   Replace SUPABASE_URL and SUPABASE_ANON_KEY with your project's values.
-   This helper will NOT send unknown columns (like 'description') to PostgREST.
--------------------------------------------------------------------------------*/
-const SupabaseHelper = (function(){
-  // <-- REPLACE these with your project's values -->
-  const SUPABASE_URL = "https://ridhgyfcgmsevazuzkkb.supabase.co";   // example: https://abcd1234.supabase.co
-  const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InJpZGhneWZjZ21zZXZhenV6a2tiIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjQxMTMwMjEsImV4cCI6MjA3OTY4OTAyMX0.ajifKz-8Xgnp_PtNEcTGZviLhczA8WAlyti-rStvq9E";                 // anon public key
-
-  // Allowed columns in Events table (according to your schema)
-  const EVENTS_FIELDS = ['user_id','event_name','startdate','enddate','status','tags','contact_email','renewal','created_at','description','location'];
-  // Allowed columns in subscriptions table
-  const SUBS_FIELDS = ['event_name','susbscriber_email','subscriber_NTID','auto_renewal','created_at'];
-
-  async function api(path, opts = {}) {
-    const url = SUPABASE_URL.replace(/\/+$/,'') + '/rest/v1/' + path;
-    const headers = Object.assign({
-      'apikey': SUPABASE_ANON_KEY,
-      'Authorization': `Bearer ${SUPABASE_ANON_KEY}`,
-      'Content-Type': 'application/json',
-      'Accept': 'application/json'
-    }, opts.headers || {});
-    const res = await fetch(url + (opts.query||''), {
-      method: opts.method || 'GET',
-      headers,
-      body: opts.body ? JSON.stringify(opts.body) : undefined,
-    });
-    if(!res.ok){
-      const txt = await res.text().catch(()=> '');
-      const err = new Error(`Supabase REST error ${res.status}: ${txt}`);
-      err.status = res.status;
-      throw err;
-    }
-    const contentType = res.headers.get('content-type') || '';
-    if(contentType.includes('application/json')) return res.json();
-    return null;
-  }
-
-  function mapRowToUIEvent(r){
-    return {
-      id: String(r.id),
-      ownerId: r.user_id,
-      name: r.event_name || '',
-      // description is not stored in DB unless you add the column;
-      // keep description in UI as empty string if missing
-      description: r.description || '', 
-      startDate: r.startdate || '',
-      endDate: r.enddate || '',
-      status: r.status || '',
-      tags: r.tags ? String(r.tags).split(',').map(s=>s.trim()).filter(Boolean) : [],
-      contactEmail: r.contact_email || '',
-      renewalEnabled: !!r.renewal,
-      createdAt: r.created_at
-    };
-  }
-
-  function pickAllowed(obj, allowed){
-    const out = {};
-    for(const k of allowed){
-      if(Object.prototype.hasOwnProperty.call(obj, k) && obj[k] !== undefined) out[k] = obj[k];
-    }
-    return out;
-  }
-
-  // EVENTS
-  async function fetchEvents({ onlyUpcoming=false, limit=1000 }={}) {
-    const queryParts = [];
-    if(onlyUpcoming){
-      const today = new Date().toISOString().slice(0,10);
-      queryParts.push(`startdate=gte.${encodeURIComponent(today)}`);
-    }
-    queryParts.push(`select=${encodeURIComponent('*')}`);
-    queryParts.push(`order=startdate.asc`);
-    queryParts.push(`limit=${limit}`);
-    const q = '?' + queryParts.join('&');
-    const data = await api(`"Events"`, { method:'GET', query: q });
-    return (data || []).map(mapRowToUIEvent);
-  }
-
-  async function createEvent(payload){
-    // Build row only with allowed DB columns
-    const row = pickAllowed({
-      user_id: payload.ownerId || payload.user_id || payload.NTID || '',
-      event_name: payload.name || payload.event_name || '',
-      startdate: payload.startDate || null,
-      enddate: payload.endDate || null,
-      status: payload.status || 'upcoming',
-      tags: Array.isArray(payload.tags) ? payload.tags.join(',') : (payload.tags||null),
-      contact_email: payload.contactEmail || payload.contact_email || '',
-      renewal: !!payload.renewalEnabled || !!payload.renew,
-      created_at: payload.createdAt || new Date().toISOString()
-    }, EVENTS_FIELDS);
-
-    const path = `"Events"?select=*`;
-    const headers = { 'Prefer': 'return=representation' };
-    const created = await api(path, { method:'POST', body: [row], headers });
-    return mapRowToUIEvent((created && created[0]) || created);
-  }
-
-  async function updateEvent(id, payload){
-    // Build patch row only with allowed DB columns (note keys must be DB column names)
-    const candidate = {
-      event_name: payload.name,
-      startdate: payload.startDate,
-      enddate: payload.endDate,
-      status: payload.status,
-      tags: Array.isArray(payload.tags) ? payload.tags.join(',') : payload.tags,
-      contact_email: payload.contactEmail,
-      renewal: payload.renewalEnabled
-    };
-    const row = pickAllowed(candidate, EVENTS_FIELDS);
-    const path = `"Events"`;
-    const query = `?id=eq.${encodeURIComponent(id)}&select=*`;
-    const headers = { 'Prefer': 'return=representation' };
-    const updated = await api(path, { method:'PATCH', query, body: row, headers });
-    return mapRowToUIEvent((updated && updated[0]) || updated);
-  }
-
-  async function deleteEvent(id){
-    const path = `"Events"`;
-    const query = `?id=eq.${encodeURIComponent(id)}`;
-    await api(path, { method:'DELETE', query });
-    return true;
-  }
-
-  // SUBSCRIPTIONS
-  async function fetchSubscriptionsByEventName(eventName){
-    const path = `subscriptions`;
-    const q = `?event_name=eq.${encodeURIComponent(eventName)}&select=*`;
-    const data = await api(path, { method:'GET', query: q });
-    return (data || []).map(s => ({
-      id: String(s.id),
-      event_name: s.event_name,
-      subscriber_email: s.susbscriber_email,
-      subscriber_NTID: s.subscriber_NTID,
-      auto_renewal: !!s.auto_renewal,
-      created_at: s.created_at
-    }));
-  }
-
-  async function subscribeByEventName({ event_name, subscriber_email, subscriber_NTID=null, auto_renewal=true }){
-    const existing = await fetchSubscriptionsByEventName(event_name);
-    if(existing.some(x => x.subscriber_email && x.subscriber_email.toLowerCase() === (subscriber_email||'').toLowerCase())) return existing.find(x => x.subscriber_email.toLowerCase() === subscriber_email.toLowerCase());
-    const row = pickAllowed({
-      event_name,
-      susbscriber_email: subscriber_email,
-      subscriber_NTID,
-      auto_renewal,
-      created_at: new Date().toISOString()
-    }, SUBS_FIELDS);
-    const path = `subscriptions?select=*`;
-    const headers = { 'Prefer': 'return=representation' };
-    const created = await api(path, { method:'POST', body: [row], headers });
-    return (created && created[0]) || created;
-  }
-
-  async function unsubscribeByEmail(event_name, subscriber_email){
-    const path = `subscriptions`;
-    const query = `?event_name=eq.${encodeURIComponent(event_name)}&susbscriber_email=eq.${encodeURIComponent(subscriber_email)}`;
-    const data = await api(path, { method:'DELETE', query });
-    return data;
-  }
-
-  return {
-    fetchEvents,
-    createEvent,
-    updateEvent,
-    deleteEvent,
-    fetchSubscriptionsByEventName,
-    subscribeByEventName,
-    unsubscribeByEmail,
-    _raw: { api, SUPABASE_URL, SUPABASE_ANON_KEY }
-  };
-})();
+  })();
 
   /* ============= In-memory caches (pure Supabase flow) ============= */
-  let EVENTS_CACHE = [];      // array of event objects as returned by Supabase
-  let SUBS_CACHE = [];        // optional cache of subscriptions for the current user
+  let EVENTS_CACHE = [];      // array of event objects as returned by mapping
+  let SUBS_CACHE = [];        // cache of subscriptions for the current user
 
   function getEvents(){ return EVENTS_CACHE; }
   function saveEvents(arr){ EVENTS_CACHE = Array.isArray(arr)?arr:[]; }
+  function getSubs(){ return SUBS_CACHE; }
+  function saveSubs(arr){ SUBS_CACHE = Array.isArray(arr)?arr:[]; }
+
+  // refreshEvents: use SupabaseHelper.fetchEvents and keep the same UI mapping as before
   async function refreshEvents(){
     try {
-      const rows = await SupabaseRest.fetchEvents({ onlyUpcoming:false, limit:1000 });
-      // map dates to YYYY-MM-DD if needed - keep as-is (supabase returns date string)
+      const rows = await SupabaseHelper.fetchEvents({ onlyUpcoming:false, limit:1000 });
+      // SupabaseHelper returns mapped UI events already; ensure fields your UI expects exist
       saveEvents(rows.map(r => ({
         id: String(r.id),
-        ownerId: r.user_id,
-        name: r.event_name || '',
+        ownerId: r.ownerId,
+        name: r.name || '',
         description: r.description || '',
-        startDate: r.startdate ? (new Date(r.startdate)).toISOString().slice(0,10) : '',
-        endDate: r.enddate ? (new Date(r.enddate)).toISOString().slice(0,10) : '',
+        startDate: r.startDate ? (new Date(r.startDate)).toISOString().slice(0,10) : '',
+        endDate: r.endDate ? (new Date(r.endDate)).toISOString().slice(0,10) : '',
         status: r.status || '',
-        tags: r.tags ? String(r.tags).split(',').map(s=>s.trim()).filter(Boolean) : [],
-        contactEmail: r.contact_email || '',
-        renewalEnabled: !!r.renewal,
-        createdAt: r.created_at || null,
+        tags: r.tags || [],
+        contactEmail: r.contactEmail || '',
+        renewalEnabled: !!r.renewalEnabled,
+        createdAt: r.createdAt || null,
+        // keep legacy flags (DB may not contain these; UI expects them)
         published: !!r.published,
         draft: !!r.draft,
         subscriberIds: r.subscriberIds || []
@@ -406,22 +206,21 @@ const SupabaseHelper = (function(){
     }
   }
 
+  // refreshSubsForUser: use Supabase REST via SupabaseHelper._raw.api to run OR filter
   async function refreshSubsForUser(currentUserParam){
     if(!currentUserParam) { SUBS_CACHE = []; return []; }
     try {
-      // fetch subscriptions where subscriber_NTID == id OR subscriber_email == email
       const email = currentUserParam.email || '';
       const ntid = currentUserParam.id || '';
-      // Supabase REST `or` requires RPC or use filter: ?or=(subscriber_NTID.eq.<ntid>,subscriber_email.eq.<email>)
-      const conditions = `or=(subscriber_NTID.eq.${encodeURIComponent(ntid)},subscriber_email.eq.${encodeURIComponent(email)})&select=*`;
-      const url = `${SUPABASE_URL.replace(/\/$/,'')}/rest/v1/subscriptions?${conditions}`;
-      const res = await fetch(url, { method:'GET', headers: { 'apikey': SUPABASE_ANON_KEY, 'Authorization': `Bearer ${SUPABASE_ANON_KEY}` } });
-      if(!res.ok){
-        const txt = await res.text().catch(()=>null);
-        throw new Error('Failed to load subs: ' + res.status + ' ' + txt);
-      }
-      const data = await res.json();
-      SUBS_CACHE = data;
+      // build or filter string as required by PostgREST
+      // NOTE: encodeURIComponent for email and ntid
+      const cond = `or=(subscriber_NTID.eq.${encodeURIComponent(ntid)},susbscriber_email.eq.${encodeURIComponent(email)})&select=*`;
+      // use raw api helper
+      const raw = SupabaseHelper._raw.api;
+      const fullPath = `subscriptions?${cond}`;
+      const data = await raw(fullPath, { method:'GET' });
+      // raw(...) returns JSON already (because api handles fetch)
+      SUBS_CACHE = data || [];
       return SUBS_CACHE;
     } catch(e){
       console.error('refreshSubsForUser error', e);
@@ -434,6 +233,13 @@ const SupabaseHelper = (function(){
 
   // --- Session & auth (NTID only) ---
   let currentUser = null;
+  const STORAGE_PREFIX = 'enotifier_';
+  const LS = {
+    key(k){ return STORAGE_PREFIX + k; },
+    get(k){ try { return JSON.parse(localStorage.getItem(this.key(k))); } catch(e){ return null; } },
+    set(k,v){ localStorage.setItem(this.key(k), JSON.stringify(v)); },
+    remove(k){ localStorage.removeItem(this.key(k)); }
+  };
   function setSession(u){ LS.set('session', u); currentUser = u; }
   function clearSession(){ LS.remove('session'); localStorage.removeItem(LS.key('remember_ntid')); currentUser = null; }
   function loadSession(){
@@ -442,7 +248,7 @@ const SupabaseHelper = (function(){
       const users = LS.get('users') || [];
       const u = users.find(x => x.id === s.id);
       if(u) currentUser = { id:u.id, ntid:u.ntid, email:u.email, displayName:u.displayName };
-      else currentUser = s; // fallback if users absent
+      else currentUser = s;
     }
   }
 
@@ -475,7 +281,6 @@ const SupabaseHelper = (function(){
     if(qs('#hero-active-events')) qs('#hero-active-events').textContent = published.length;
     if(qs('#hero-subscribed-events')) qs('#hero-subscribed-events').textContent = subs.length;
 
-    // Upcoming renewals list
     const ur = qs('#upcoming-renewals');
     if(ur){
       ur.innerHTML = '';
@@ -493,7 +298,6 @@ const SupabaseHelper = (function(){
       });
     }
 
-    // Recent subscriptions list
     const rs = qs('#recent-subs');
     if(rs){
       rs.innerHTML = '';
@@ -513,7 +317,6 @@ const SupabaseHelper = (function(){
   function renderOwnerEventsTabs(){
     const container = qs('#owner-events');
     if(!container) return;
-    // sync status in memory
     const all = getEvents();
     all.forEach(e => { e.status = computeStatus(e); });
 
@@ -580,7 +383,7 @@ const SupabaseHelper = (function(){
   async function handleDeleteEvent(id){
     if(!confirm('Delete this event?')) return;
     try {
-      await SupabaseRest.deleteEvent(id);
+      await SupabaseHelper.deleteEvent(id);
       await refreshEvents();
       toast('Event deleted', 'success');
       renderOwnerEventsTabs();
@@ -618,7 +421,9 @@ const SupabaseHelper = (function(){
     if(idx === -1) { toast('Not found or unauthorized', 'error'); return; }
     const newPublished = !events[idx].published;
     try {
-      await SupabaseRest.updateEvent(id, { published: newPublished, draft: !newPublished, status: newPublished ? 'upcoming' : 'draft' });
+      // Pass status to server; SupabaseHelper will ignore unknown cols (published/draft) if they don't exist
+      await SupabaseHelper.updateEvent(id, { status: newPublished ? 'upcoming' : 'draft' });
+      // Update local flags by reloading from server and preserving UI fields (published/draft may be UI-only)
       await refreshEvents();
       toast(newPublished ? 'Published' : 'Unpublished', 'success');
       renderOwnerEventsTabs();
@@ -639,7 +444,6 @@ const SupabaseHelper = (function(){
 
     const saveDraftBtn = qs('#save-draft');
 
-    // validation helper (returns first invalid field or null)
     function validateFormFields(){
       const reqs = [
         { sel: '#event-name', msg: 'Event name' },
@@ -654,11 +458,9 @@ const SupabaseHelper = (function(){
         if(!el) return { ok:false, field:null, msg:`Missing field ${r.sel}` };
         if(String(el.value || '').trim() === '') return { ok:false, field:el, msg:`${r.msg} is required` };
       }
-      // simple email pattern
       const email = qs('#contact-email').value.trim();
       const emailRe = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
       if(!emailRe.test(email)) return { ok:false, field: qs('#contact-email'), msg:'Enter a valid contact email' };
-      // dates sanity: start <= end
       const s = qs('#start-date').value; const e = qs('#end-date').value;
       if(s && e && new Date(s) > new Date(e)) return { ok:false, field: qs('#start-date'), msg:'Start date cannot be after end date' };
       return { ok:true, field:null };
@@ -671,34 +473,31 @@ const SupabaseHelper = (function(){
       const editing = sessionStorage.getItem('editing_event');
       try {
         if(editing){
-          await SupabaseRest.updateEvent(editing, {
-            event_name: payload.name,
+          await SupabaseHelper.updateEvent(editing, {
+            name: payload.name,
             description: payload.description,
-            startdate: payload.startDate || null,
-            enddate: payload.endDate || null,
-            contact_email: payload.contactEmail,
+            startDate: payload.startDate || null,
+            endDate: payload.endDate || null,
+            contactEmail: payload.contactEmail,
             tags: payload.tags.join ? payload.tags.join(',') : payload.tags,
-            renewal: !!payload.renewalEnabled,
-            status: 'draft',
-            published: false,
-            draft: true
+            renewalEnabled: !!payload.renewalEnabled,
+            status: 'draft'
           });
           sessionStorage.removeItem('editing_event');
           toast('Draft updated (saved to server)', 'success');
         } else {
-          await SupabaseRest.createEvent({
-            user_id: currentUser.id,
-            event_name: payload.name,
+          await SupabaseHelper.createEvent({
+            ownerId: currentUser.id,
+            name: payload.name,
             description: payload.description,
-            startdate: payload.startDate || null,
-            enddate: payload.endDate || null,
-            contact_email: payload.contactEmail,
+            startDate: payload.startDate || null,
+            endDate: payload.endDate || null,
+            contactEmail: payload.contactEmail,
             tags: payload.tags.join ? payload.tags.join(',') : payload.tags,
-            renewal: !!payload.renewalEnabled,
+            renewalEnabled: !!payload.renewalEnabled,
             status: 'draft',
-            published: false,
-            draft: true,
-            created_at: new Date().toISOString()
+            createdAt: new Date().toISOString(),
+            location: payload.location
           });
           toast('Draft saved (server)', 'success');
         }
@@ -726,34 +525,31 @@ const SupabaseHelper = (function(){
       const editing = sessionStorage.getItem('editing_event');
       try {
         if(editing){
-          await SupabaseRest.updateEvent(editing, {
-            event_name: payload.name,
+          await SupabaseHelper.updateEvent(editing, {
+            name: payload.name,
             description: payload.description,
-            startdate: payload.startDate || null,
-            enddate: payload.endDate || null,
-            contact_email: payload.contactEmail,
+            startDate: payload.startDate || null,
+            endDate: payload.endDate || null,
+            contactEmail: payload.contactEmail,
             tags: payload.tags.join ? payload.tags.join(',') : payload.tags,
-            renewal: !!payload.renewalEnabled,
-            status: 'upcoming',
-            published: true,
-            draft: false
+            renewalEnabled: !!payload.renewalEnabled,
+            status: 'upcoming'
           });
           sessionStorage.removeItem('editing_event');
           toast('Event updated & published', 'success');
         } else {
-          await SupabaseRest.createEvent({
-            user_id: currentUser.id,
-            event_name: payload.name,
+          await SupabaseHelper.createEvent({
+            ownerId: currentUser.id,
+            name: payload.name,
             description: payload.description,
-            startdate: payload.startDate || null,
-            enddate: payload.endDate || null,
-            contact_email: payload.contactEmail,
+            startDate: payload.startDate || null,
+            endDate: payload.endDate || null,
+            contactEmail: payload.contactEmail,
             tags: payload.tags.join ? payload.tags.join(',') : payload.tags,
-            renewal: !!payload.renewalEnabled,
+            renewalEnabled: !!payload.renewalEnabled,
             status: 'upcoming',
-            published: true,
-            draft: false,
-            created_at: new Date().toISOString()
+            createdAt: new Date().toISOString(),
+            location: payload.location
           });
           toast('Event published', 'success');
         }
@@ -836,10 +632,8 @@ const SupabaseHelper = (function(){
   async function isSubscribed(eventId){
     const ev = getEvents().find(e => String(e.id) === String(eventId));
     if(!ev) return false;
-    // check in SUBS_CACHE or query server
     const subs = SUBS_CACHE.filter(s => s.event_name === ev.name);
     if(subs.length === 0 && currentUser){
-      // refresh for user
       await refreshSubsForUser(currentUser);
     }
     return (SUBS_CACHE || []).some(s => s.event_name === ev.name && (s.subscriber_NTID === currentUser.id || (s.subscriber_email && s.subscriber_email.toLowerCase() === currentUser.email.toLowerCase())));
@@ -851,25 +645,25 @@ const SupabaseHelper = (function(){
       if(!email) return toast('Email required', 'error');
       const ev = getEvents().find(e => e.id === eventId);
       if(!ev) return toast('Event not found', 'error');
-      const existing = await SupabaseRest.fetchSubscriptionsByEventName(ev.name);
+      const existing = await SupabaseHelper.fetchSubscriptionsByEventName(ev.name);
       const already = existing.some(s => s.subscriber_email && s.subscriber_email.toLowerCase() === email.toLowerCase());
       if(already){
-        await SupabaseRest.unsubscribeByEmail(ev.name, email);
+        await SupabaseHelper.unsubscribeByEmail(ev.name, email);
         toast('Unsubscribed', 'info');
       } else {
-        await SupabaseRest.subscribeByEventName({ event_name: ev.name, subscriber_email: email, subscriber_NTID: null });
+        await SupabaseHelper.subscribeByEventName({ event_name: ev.name, subscriber_email: email, subscriber_NTID: null });
         toast('Subscribed (by email)', 'success');
       }
     } else {
       const ev = getEvents().find(e => String(e.id) === String(eventId));
       if(!ev) return toast('Event not found', 'error');
-      const existing = await SupabaseRest.fetchSubscriptionsByEventName(ev.name);
+      const existing = await SupabaseHelper.fetchSubscriptionsByEventName(ev.name);
       const already = existing.some(s => s.subscriber_NTID === currentUser.id || (s.subscriber_email && s.subscriber_email.toLowerCase() === currentUser.email.toLowerCase()));
       if(already){
-        await SupabaseRest.unsubscribeByEmail(ev.name, currentUser.email);
+        await SupabaseHelper.unsubscribeByEmail(ev.name, currentUser.email);
         toast('Unsubscribed', 'info');
       } else {
-        await SupabaseRest.subscribeByEventName({ event_name: ev.name, subscriber_email: currentUser.email, subscriber_NTID: currentUser.id });
+        await SupabaseHelper.subscribeByEventName({ event_name: ev.name, subscriber_email: currentUser.email, subscriber_NTID: currentUser.id });
         toast('Subscribed', 'success');
       }
     }
@@ -906,7 +700,7 @@ const SupabaseHelper = (function(){
         if(!confirm('Unsubscribe?')) return;
         const eventName = b.dataset.eventname;
         const subscriber = b.dataset.subscriber;
-        await SupabaseRest.unsubscribeByEmail(eventName, currentUser.email || subscriber);
+        await SupabaseHelper.unsubscribeByEmail(eventName, currentUser.email || subscriber);
         toast('Unsubscribed', 'info');
         await refreshSubsForUser(currentUser);
         await refreshEvents();
@@ -926,7 +720,6 @@ const SupabaseHelper = (function(){
     if(profile) profile.addEventListener('click', ()=> { if(confirm('Logout?')) { logoutFlow(); } });
   }
 
-  // showSection ensures dashboard scrolls to top
   function showSection(id){
     qsa('section').forEach(s => s.classList.remove('active'));
     const sec = qs('#' + id);
@@ -984,7 +777,6 @@ const SupabaseHelper = (function(){
     showSection('dashboard');
     window.scrollTo({ top: 0, behavior: 'instant' });
 
-    // initialize data from server
     (async () => {
       try { await refreshEvents(); } catch(e){ console.warn('refreshEvents login:', e); }
       try { await refreshSubsForUser(currentUser); } catch(e){ console.warn('refreshSubsForUser login:', e); }
@@ -1023,16 +815,13 @@ const SupabaseHelper = (function(){
   function debounce(fn, t=200){ let to=null; return (...a)=>{ clearTimeout(to); to=setTimeout(()=>fn(...a), t); }; }
 
   async function boot(){
-    // seed users only
     if(!LS.get('users')) LS.set('users', [{ id:'u_demo', ntid:'demo', displayName:'demo', email:'demo@Bosch.in' }]);
     loadSession();
 
-    // if remembered NTID -> auto login
     const rem = localStorage.getItem(LS.key('remember_ntid'));
     if(rem && !currentUser) { loginWithNTID(rem, true); return; }
 
     if(currentUser){
-      // fetch server data
       try { await refreshEvents(); } catch(e){ console.warn('initial refreshEvents', e); }
       try { await refreshSubsForUser(currentUser); } catch(e){ console.warn('initial refreshSubsForUser', e); }
 
@@ -1050,7 +839,6 @@ const SupabaseHelper = (function(){
       document.body.classList.add('login-active');
     }
 
-    // login button
     const loginBtn = qs('#login-btn');
     if(loginBtn) loginBtn.addEventListener('click', (e)=> { e.preventDefault(); const ntid = qs('#ntid').value.trim(); const remember = !!qs('#remember').checked; if(!ntid) return toast('Please enter NTID', 'error'); loginWithNTID(ntid, remember); });
 
@@ -1066,14 +854,8 @@ const SupabaseHelper = (function(){
     v.addEventListener('click', e => {
       e.preventDefault();
       const type = v.dataset.open;
-
-      if (type === 'renewals') {
-        showSection('my-event');   // Upcoming Renewals → My Event
-      }
-
-      if (type === 'recent-subs') {
-        showSection('my-subscription');  // Recent Subscriptions → My Subscription
-      }
+      if (type === 'renewals') showSection('my-event');
+      if (type === 'recent-subs') showSection('my-subscription');
     });
   });
 
@@ -1088,7 +870,6 @@ const SupabaseHelper = (function(){
     });
   }
 
-  // Hide when clicking outside
   document.addEventListener('click', ()=> pd && pd.classList.add('hidden') );
 
   // Logout
@@ -1103,24 +884,9 @@ const SupabaseHelper = (function(){
 
   document.addEventListener('DOMContentLoaded', () => { boot().catch(e => console.error('boot error', e)); });
 
-  // Expose debug helpers
-  /*window.EN = {
-    refreshEvents, refreshSubsForUser, getEvents,
-    SupabaseRest
-  };*/
-
-   // Expose debug helpers (adjusted to reflect current helpers)
-   window.EN = {
-  // cache / local helpers (safe to call from console)
-     getEvents,       // returns cached events (from LS)
-     saveEvents,      // updates local cache (not recommended for server writes)
-     getSubs,         // returns cached subscriptions
-     saveSubs,        // updates local subs cache
-     uid,             // helper id generator
-
-  // Supabase REST helper (fetch-based)
-     SupabaseHelper    // use SupabaseHelper.fetchEvents(), .createEvent(), etc.
-   };
-)(); // IIFE end
-
-
+  // Expose debug helpers (adjusted to reflect current helpers)
+  window.EN = {
+     getEvents, saveEvents, getSubs, saveSubs, uid,
+     SupabaseHelper
+  };
+})(); // IIFE end
