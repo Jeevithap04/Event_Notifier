@@ -39,7 +39,7 @@ const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBh
   }
 
   /* ---------------- Initialize Supabase SDK v2 ---------------- */
-  let supabaseClient = null;
+  /*let supabaseClient = null;
   function initSupabaseClient(){
     if(supabaseClient) return supabaseClient;
 
@@ -62,8 +62,9 @@ const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBh
 
     return supabaseClient;
   }
+   
 
-  /* ---------------- Supabase SDK helper wrapper ---------------- */
+  
   const SupabaseHelper = (function(){
     function mapRowToUIEvent(r){
       return {
@@ -97,7 +98,7 @@ const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBh
 
     async function createEvent(payload){
       const sb = initSupabaseClient();
-      // payload expected: DB column names
+      
       const { data, error } = await sb.from('Events').insert([payload]).select().single();
       if(error) throw error;
       return mapRowToUIEvent(data);
@@ -117,7 +118,7 @@ const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBh
       return true;
     }
 
-    // SUBSCRIPTIONS
+    
     async function fetchSubscriptionsByEventName(eventName){
       const sb = initSupabaseClient();
       const { data, error } = await sb.from('subscriptions').select('*').eq('event_name', eventName);
@@ -148,7 +149,7 @@ const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBh
 
     async function unsubscribeByEmail(event_name, subscriber_email){
       const sb = initSupabaseClient();
-      // find subs
+      
       const { data: subs, error: err1 } = await sb.from('subscriptions').select('id,subscriber_email').eq('event_name', event_name).in('subscriber_email', [subscriber_email]);
       if(err1) throw err1;
       if(!subs || subs.length === 0) return [];
@@ -158,7 +159,7 @@ const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBh
       return data;
     }
 
-    // fetch subscriptions for current user by NTID or email (returns array)
+    
     async function fetchSubscriptionsForUserNTIDOrEmail(ntid, email){
       const sb = initSupabaseClient();
       // use or filter
@@ -179,7 +180,288 @@ const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBh
       fetchSubscriptionsForUserNTIDOrEmail,
       _raw: () => initSupabaseClient()
     };
-  })();
+  })();*/
+
+   /* ---------------- Robust Supabase init + helper (SDK v2 with REST fallback) ---------------- */
+
+let supabaseClient = null;
+function initSupabaseClient(){
+  if(supabaseClient) return supabaseClient;
+
+  // try to use UMD SDK (if loaded) with persistSession:false to avoid storage
+  try {
+    const createClientFn = (window.supabaseJs && window.supabaseJs.createClient) || (window.supabase && window.supabase.createClient);
+    if(createClientFn){
+      supabaseClient = createClientFn(SUPABASE_URL, SUPABASE_ANON_KEY, {
+        auth: { persistSession: false, detectSessionInUrl: false }
+      });
+      // quick sanity ping to ensure client usable
+      // NOTE: don't await here — we assume the client exists; SDK errors will be caught in usage
+      return supabaseClient;
+    }
+  } catch(err){
+    console.warn('Supabase SDK init error (will fallback to REST):', err);
+    supabaseClient = null;
+  }
+
+  // If SDK wasn't available or throws, we return null and use REST fallback helpers.
+  return null;
+}
+
+// REST helper (fallback) — uses fetch + proper headers including apikey
+function restRequest(path, method='GET', body=null, params=''){
+  const base = SUPABASE_URL.replace(/\/$/,'') + '/rest/v1/' + path;
+  const q = params ? (params.startsWith('?') ? params : '?' + params) : '';
+  const url = base + q;
+  const headers = {
+    'apikey': SUPABASE_ANON_KEY,
+    'Authorization': `Bearer ${SUPABASE_ANON_KEY}`,
+    'Content-Type': 'application/json'
+  };
+  const opts = { method, headers, credentials: 'omit' };
+  if(body !== null) opts.body = JSON.stringify(body);
+  return fetch(url, opts).then(async res => {
+    const ct = res.headers.get('content-type') || '';
+    const data = ct.includes('application/json') ? await res.json() : await res.text();
+    if(!res.ok){
+      const msg = (data && data.message) ? data.message : (typeof data === 'string' ? data : JSON.stringify(data));
+      const err = new Error(`Supabase REST error ${res.status}: ${msg}`);
+      err.status = res.status; err.body = data;
+      throw err;
+    }
+    return data;
+  });
+}
+
+const SupabaseHelper = (function(){
+  // map DB row to UI event
+  function mapRowToUIEvent(r){
+    return {
+      id: String(r.id),
+      ownerId: r.user_id,
+      name: r.event_name || '',
+      description: r.description || '',
+      startDate: r.startdate ? (new Date(r.startdate)).toISOString().slice(0,10) : '',
+      endDate: r.enddate ? (new Date(r.enddate)).toISOString().slice(0,10) : '',
+      status: r.status || '',
+      tags: r.tags ? (String(r.tags).split(',').map(s=>s.trim()).filter(Boolean)) : [],
+      contactEmail: r.contact_email || '',
+      renewalEnabled: !!r.renewal,
+      createdAt: r.created_at,
+      published: !!r.published,
+      draft: !!r.draft
+    };
+  }
+
+  // Try SDK first, otherwise call REST via restRequest
+  async function fetchEvents({ onlyUpcoming=false, limit=1000 } = {}){
+    const client = initSupabaseClient();
+    if(client){
+      try {
+        let q = client.from('Events').select('*').order('startdate', { ascending: true }).limit(limit);
+        if(onlyUpcoming){
+          const today = new Date().toISOString().slice(0,10);
+          q = q.gte('startdate', today);
+        }
+        const { data, error } = await q;
+        if(error) throw error;
+        return (data||[]).map(mapRowToUIEvent);
+      } catch(err){
+        console.warn('Supabase SDK fetchEvents failed, falling back to REST:', err);
+        // continue to REST fallback
+      }
+    }
+    // REST fallback
+    let params = `select=*&order=startdate.asc&limit=${limit}`;
+    if(onlyUpcoming){
+      const today = new Date().toISOString().slice(0,10);
+      params += `&startdate=gte.${today}`;
+    }
+    const data = await restRequest('Events', 'GET', null, params);
+    return (Array.isArray(data) ? data : []).map(mapRowToUIEvent);
+  }
+
+  async function createEvent(payload){
+    const client = initSupabaseClient();
+    if(client){
+      try {
+        const { data, error } = await client.from('Events').insert([payload]).select().single();
+        if(error) throw error;
+        return mapRowToUIEvent(data);
+      } catch(err){
+        console.warn('Supabase SDK createEvent failed, falling back to REST:', err);
+      }
+    }
+    // REST fallback: use POST and request representation (Supabase REST uses Prefer header or prefer param)
+    // We'll use ?select=* + Prefer header via params `?select=*` and include prefer header via fetch inside restRequest
+    // But restRequest doesn't accept custom headers currently — we'll call fetch directly here to set 'Prefer: return=representation'
+    const url = `${SUPABASE_URL.replace(/\/$/,'')}/rest/v1/Events?select=*`;
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: {
+        'apikey': SUPABASE_ANON_KEY,
+        'Authorization': `Bearer ${SUPABASE_ANON_KEY}`,
+        'Content-Type': 'application/json',
+        'Prefer': 'return=representation'
+      },
+      body: JSON.stringify([payload])
+    });
+    const ct = res.headers.get('content-type') || '';
+    const data = ct.includes('application/json') ? await res.json() : await res.text();
+    if(!res.ok){
+      const msg = (data && data.message) ? data.message : (typeof data === 'string' ? data : JSON.stringify(data));
+      const err = new Error(`Supabase REST error ${res.status}: ${msg}`);
+      err.status = res.status; err.body = data;
+      throw err;
+    }
+    const row = Array.isArray(data) ? data[0] : data;
+    return mapRowToUIEvent(row);
+  }
+
+  async function updateEvent(id, payload){
+    const client = initSupabaseClient();
+    if(client){
+      try {
+        const { data, error } = await client.from('Events').update(payload).eq('id', id).select().single();
+        if(error) throw error;
+        return mapRowToUIEvent(data);
+      } catch(err){
+        console.warn('Supabase SDK updateEvent failed, falling back to REST:', err);
+      }
+    }
+    // REST fallback via PATCH with Prefer header
+    const url = `${SUPABASE_URL.replace(/\/$/,'')}/rest/v1/Events?id=eq.${encodeURIComponent(id)}`;
+    const res = await fetch(url, {
+      method: 'PATCH',
+      headers: {
+        'apikey': SUPABASE_ANON_KEY,
+        'Authorization': `Bearer ${SUPABASE_ANON_KEY}`,
+        'Content-Type': 'application/json',
+        'Prefer': 'return=representation'
+      },
+      body: JSON.stringify(payload)
+    });
+    const ct = res.headers.get('content-type') || '';
+    const data = ct.includes('application/json') ? await res.json() : await res.text();
+    if(!res.ok){
+      const msg = (data && data.message) ? data.message : (typeof data === 'string' ? data : JSON.stringify(data));
+      const err = new Error(`Supabase REST update error ${res.status}: ${msg}`);
+      err.status = res.status; err.body = data;
+      throw err;
+    }
+    const row = Array.isArray(data) ? data[0] : data;
+    return mapRowToUIEvent(row);
+  }
+
+  async function deleteEvent(id){
+    const client = initSupabaseClient();
+    if(client){
+      try {
+        const { error } = await client.from('Events').delete().eq('id', id);
+        if(error) throw error;
+        return true;
+      } catch(err){
+        console.warn('Supabase SDK deleteEvent failed, falling back to REST:', err);
+      }
+    }
+    const url = `${SUPABASE_URL.replace(/\/$/,'')}/rest/v1/Events?id=eq.${encodeURIComponent(id)}`;
+    const res = await fetch(url, { method:'DELETE', headers: { 'apikey': SUPABASE_ANON_KEY, 'Authorization': `Bearer ${SUPABASE_ANON_KEY}` } });
+    if(!res.ok){
+      const txt = await res.text().catch(()=>null);
+      throw new Error('Delete failed: ' + res.status + ' ' + txt);
+    }
+    return true;
+  }
+
+  // SUBSCRIPTIONS
+  async function fetchSubscriptionsByEventName(eventName){
+    const client = initSupabaseClient();
+    if(client){
+      try {
+        const { data, error } = await client.from('subscriptions').select('*').eq('event_name', eventName);
+        if(error) throw error;
+        return (data||[]);
+      } catch(err){
+        console.warn('SDK fetchSubscriptionsByEventName failed, falling back to REST:', err);
+      }
+    }
+    const params = `select=*&event_name=eq.${encodeURIComponent(eventName)}`;
+    const data = await restRequest('subscriptions','GET', null, params);
+    return Array.isArray(data) ? data : [];
+  }
+
+  async function subscribeByEventName({ event_name, subscriber_email, subscriber_NTID=null, auto_renewal=true }){
+    const client = initSupabaseClient();
+    const payload = { event_name, subscriber_email, subscriber_NTID, auto_renewal, created_at: new Date().toISOString() };
+    if(client){
+      try {
+        const { data, error } = await client.from('subscriptions').insert([payload]).select().single();
+        if(error) throw error;
+        return data;
+      } catch(err){
+        console.warn('SDK subscribeByEventName failed, falling back to REST:', err);
+      }
+    }
+    const data = await restRequest('subscriptions', 'POST', [payload], 'prefer=return=representation');
+    return Array.isArray(data) ? data[0] : data;
+  }
+
+  async function unsubscribeByEmail(event_name, subscriber_email){
+    const client = initSupabaseClient();
+    if(client){
+      try {
+        // delete where event_name and subscriber_email match
+        const { data, error } = await client.from('subscriptions').delete().match({ event_name, subscriber_email }).select();
+        if(error) throw error;
+        return data;
+      } catch(err){
+        console.warn('SDK unsubscribeByEmail failed, falling back to REST:', err);
+      }
+    }
+    // REST fallback: find ids then delete
+    const subs = await fetchSubscriptionsByEventName(event_name);
+    const toDelete = subs.filter(s => (s.subscriber_email && s.subscriber_email.toLowerCase() === String(subscriber_email||'').toLowerCase()));
+    if(toDelete.length === 0) return [];
+    const ids = toDelete.map(d => d.id);
+    const url = `${SUPABASE_URL.replace(/\/$/,'')}/rest/v1/subscriptions?id=in.(${ids.map(i=>encodeURIComponent(i)).join(',')})`;
+    const res = await fetch(url, { method:'DELETE', headers: { 'apikey': SUPABASE_ANON_KEY, 'Authorization': `Bearer ${SUPABASE_ANON_KEY}` } });
+    if(!res.ok){ const txt = await res.text().catch(()=>null); throw new Error('Unsubscribe failed: ' + res.status + ' ' + txt); }
+    return toDelete;
+  }
+
+  async function fetchSubscriptionsForUserNTIDOrEmail(ntid, email){
+    const client = initSupabaseClient();
+    if(client){
+      try {
+        const { data, error } = await client.from('subscriptions').select('*').or(`subscriber_NTID.eq.${ntid},subscriber_email.eq.${email}`);
+        if(error) throw error;
+        return data || [];
+      } catch(err){
+        console.warn('SDK fetchSubscriptionsForUserNTIDOrEmail failed, falling back to REST:', err);
+      }
+    }
+    const conditions = `or=(subscriber_NTID.eq.${encodeURIComponent(ntid)},subscriber_email.eq.${encodeURIComponent(email)})&select=*`;
+    const url = `${SUPABASE_URL.replace(/\/$/,'')}/rest/v1/subscriptions?${conditions}`;
+    const res = await fetch(url, { method:'GET', headers: { 'apikey': SUPABASE_ANON_KEY, 'Authorization': `Bearer ${SUPABASE_ANON_KEY}` } });
+    if(!res.ok){ const txt = await res.text().catch(()=>null); throw new Error('Failed to load subs: ' + res.status + ' ' + txt); }
+    const data = await res.json();
+    return data || [];
+  }
+
+  return {
+    init: initSupabaseClient,
+    fetchEvents,
+    createEvent,
+    updateEvent,
+    deleteEvent,
+    fetchSubscriptionsByEventName,
+    subscribeByEventName,
+    unsubscribeByEmail,
+    fetchSubscriptionsForUserNTIDOrEmail,
+    _raw: () => supabaseClient
+  };
+})(); // SupabaseHelper end
+
 
   /* ============= In-memory caches ============= */
   let EVENTS_CACHE = [];
@@ -872,3 +1154,4 @@ const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBh
   };
 
 })(); // IIFE end
+
