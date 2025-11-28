@@ -5,7 +5,7 @@
    ------------------------------------------------------------------ */
 
 /* ========== Supabase REST config ========== */
-const SUPABASE_URL = "https://ridhgyfcgmsevazuzkkb.supabase.co";      // << REPLACE
+/*const SUPABASE_URL = "https://ridhgyfcgmsevazuzkkb.supabase.co";      // << REPLACE
 const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InJpZGhneWZjZ21zZXZhenV6a2tiIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjQxMTMwMjEsImV4cCI6MjA3OTY4OTAyMX0.ajifKz-8Xgnp_PtNEcTGZviLhczA8WAlyti-rStvq9E";                   // << REPLACE
 
 (() => {
@@ -35,7 +35,7 @@ const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBh
     if(type==='info') box.style.background = 'linear-gradient(135deg,#4d4da9,#6a42f4)';
     container.appendChild(box);
     setTimeout(()=> box.remove(), t);
-  }
+  }*/
 
   /* ---------------- Supabase REST helper ---------------- */
   /*const SupabaseRest = (function(){
@@ -205,11 +205,11 @@ const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBh
 -------------------------------------------------------------------------------*/
 const SupabaseHelper = (function(){
   // <-- REPLACE these with your project's values -->
-  const SUPABASE_URL = "https://YOUR-PROJECT.supabase.co";   // example: https://abcd1234.supabase.co
-  const SUPABASE_ANON_KEY = "YOUR_ANON_KEY";                 // anon public key
+  const SUPABASE_URL = "https://ridhgyfcgmsevazuzkkb.supabase.co";   // example: https://abcd1234.supabase.co
+  const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InJpZGhneWZjZ21zZXZhenV6a2tiIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjQxMTMwMjEsImV4cCI6MjA3OTY4OTAyMX0.ajifKz-8Xgnp_PtNEcTGZviLhczA8WAlyti-rStvq9E";                 // anon public key
 
   // Allowed columns in Events table (according to your schema)
-  const EVENTS_FIELDS = ['user_id','event_name','startdate','enddate','status','tags','contact_email','renewal','created_at'];
+  const EVENTS_FIELDS = ['user_id','event_name','startdate','enddate','status','tags','contact_email','renewal','created_at','description','location'];
   // Allowed columns in subscriptions table
   const SUBS_FIELDS = ['event_name','susbscriber_email','subscriber_NTID','auto_renewal','created_at'];
 
@@ -1124,6 +1124,7 @@ const SupabaseHelper = (function(){
 
 
 })(); // IIFE end
+
 
 
 
