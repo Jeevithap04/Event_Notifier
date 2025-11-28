@@ -80,19 +80,18 @@ const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBh
       return await request('Events', 'GET', null, params);
     }
 
-    // --------- FIXED createEvent: use Prefer header instead of passing prefer as URL param ----------
+    // ---- FIXED createEvent: send Prefer header instead of prefer query param ----
     async function createEvent(payload){
+      const opts = { ...payload };
       const url = `${SUPABASE_URL.replace(/\/$/,'')}/rest/v1/Events`;
-      const opts = {
+      // send array payload (Supabase expects array for insert)
+      const res = await fetch(url, {
         method: 'POST',
         headers: headers({ 'Prefer': 'return=representation' }),
-        body: JSON.stringify([ payload ]) // Supabase expects array when inserting multiple; returns array
-      };
-      const res = await fetch(url, opts);
+        body: JSON.stringify([opts])
+      });
       const ct = res.headers.get('content-type') || '';
-      let data = null;
-      if(ct.includes('application/json')) data = await res.json();
-      else data = await res.text();
+      const data = ct.includes('application/json') ? await res.json() : await res.text();
       if(!res.ok){
         const msg = (data && data.message) ? data.message : (typeof data === 'string' ? data : JSON.stringify(data));
         const err = new Error(`Supabase REST error ${res.status}: ${msg}`);
@@ -138,7 +137,7 @@ const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBh
       return await request('subscriptions', 'GET', null, q);
     }
 
-    // --------- FIXED subscribeByEventName: use Prefer header instead of prefer URL param ----------
+    // ---- FIXED subscribeByEventName: send Prefer header for returned representation ----
     async function subscribeByEventName({ event_name, subscriber_email, subscriber_NTID=null, auto_renewal=true }){
       const payload = {
         event_name,
@@ -151,12 +150,10 @@ const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBh
       const res = await fetch(url, {
         method: 'POST',
         headers: headers({ 'Prefer': 'return=representation' }),
-        body: JSON.stringify([ payload ])
+        body: JSON.stringify([payload])
       });
       const ct = res.headers.get('content-type') || '';
-      let data = null;
-      if(ct.includes('application/json')) data = await res.json();
-      else data = await res.text();
+      const data = ct.includes('application/json') ? await res.json() : await res.text();
       if(!res.ok){
         const msg = (data && data.message) ? data.message : (typeof data === 'string' ? data : JSON.stringify(data));
         const err = new Error(`Supabase REST error ${res.status}: ${msg}`);
@@ -328,7 +325,6 @@ const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBh
     }
   }
 
-  // (rest of your UI logic remains unchanged...)
   // --- My Events rendering with Active / Drafts / Expired ---
   function renderOwnerEventsTabs(){
     const container = qs('#owner-events');
