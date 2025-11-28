@@ -6,7 +6,7 @@
   const qsa = (s, r=document) => Array.from(r.querySelectorAll(s));
   const uid = () => 'id_' + Date.now() + '_' + Math.floor(Math.random()*9999);
   const escapeHtml = s => String(s||'').replace(/[&<>"']/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
-  function toast(msg, type='info', t=3500){
+  function toast(msg, type='info', t=3500){f
     let container = qs('#toasts');
     if(!container){ container = document.createElement('div'); container.id = 'toasts'; document.body.appendChild(container); }
     const box = document.createElement('div');
@@ -99,7 +99,7 @@
       queryParts.push(`order=startdate.asc`);
       queryParts.push(`limit=${limit}`);
       const q = '?' + queryParts.join('&');
-      const data = await api(`"Events"`, { method:'GET', query: q });
+      const data = await api(`Events`, { method:'GET', query: q });
       return (data || []).map(mapRowToUIEvent);
     }
 
@@ -118,7 +118,7 @@
         location: payload.location
       }, EVENTS_FIELDS);
 
-      const path = `"Events"?select=*`;
+      const path = `Events?select=*`;
       const headers = { 'Prefer': 'return=representation' };
       const created = await api(path, { method:'POST', body: [row], headers });
       return mapRowToUIEvent((created && created[0]) || created);
@@ -137,7 +137,7 @@
         location: payload.location
       };
       const row = pickAllowed(candidate, EVENTS_FIELDS);
-      const path = `"Events"`;
+      const path = `Events`;
       const query = `?id=eq.${encodeURIComponent(id)}&select=*`;
       const headers = { 'Prefer': 'return=representation' };
       const updated = await api(path, { method:'PATCH', query, body: row, headers });
@@ -145,7 +145,7 @@
     }
 
     async function deleteEvent(id){
-      const path = `"Events"`;
+      const path = `Events`;
       const query = `?id=eq.${encodeURIComponent(id)}`;
       await api(path, { method:'DELETE', query });
       return true;
@@ -893,3 +893,4 @@
   window.EN = { getEvents, saveEvents, getSubs, saveSubs, uid, SupabaseHelper };
 
 })(); // IIFE end
+
