@@ -1104,12 +1104,27 @@ const SupabaseHelper = (function(){
   document.addEventListener('DOMContentLoaded', () => { boot().catch(e => console.error('boot error', e)); });
 
   // Expose debug helpers
-  window.EN = {
+  /*window.EN = {
     refreshEvents, refreshSubsForUser, getEvents,
     SupabaseRest
-  };
+  };*/
+
+   // Expose debug helpers (adjusted to reflect current helpers)
+   window.EN = {
+  // cache / local helpers (safe to call from console)
+     getEvents,       // returns cached events (from LS)
+     saveEvents,      // updates local cache (not recommended for server writes)
+     getSubs,         // returns cached subscriptions
+     saveSubs,        // updates local subs cache
+     uid,             // helper id generator
+
+  // Supabase REST helper (fetch-based)
+     SupabaseHelper    // use SupabaseHelper.fetchEvents(), .createEvent(), etc.
+   };
+
 
 })(); // IIFE end
+
 
 
 
