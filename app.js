@@ -848,3 +848,4 @@ const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBh
   window.EN = { refreshEvents, refreshSubsForUser, getEvents, Api };
 
 })(); // end IIFE
+
