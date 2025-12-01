@@ -8,6 +8,15 @@ const SUPABASE_URL = "https://ridhgyfcgmsevazuzkkb.supabase.co";
 const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InJpZGhneWZjZ21zZXZhenV6a2tiIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjQxMTMwMjEsImV4cCI6MjA3OTY4OTAyMX0.ajifKz-8Xgnp_PtNEcTGZviLhczA8WAlyti-rStvq9E";
 
 (() => {
+
+   // near top of your app.js
+const FORCE_REST = true;
+
+function initSupabaseClient(){
+  if(FORCE_REST) return null; // always use REST fallback
+  // ...existing init logic...
+}
+
   /* ----------------- Utilities & Toasts ----------------- */
   const STORAGE_PREFIX = 'enotifier_';
   const LS = {
@@ -952,3 +961,4 @@ const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBh
   window.EN = { refreshEvents, refreshSubsForUser, getEvents, SupabaseHelper };
 
 })(); // IIFE end
+
