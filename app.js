@@ -1,14 +1,17 @@
-/* app.js - REST-only Supabase integration (configured for your new project)
-   - Uses the REST endpoints for public."Events" and public.subscriptions
-   - No Supabase SDK (avoids tracking-prevention storage issues)
-   - Shows actionable SQL when schema columns are missing
+/* app.js — Full integration with Power Automate (SharePoint)
+   Replace FLOW_* placeholders below with your Power Automate HTTP URLs and API key.
 */
 
-const SUPABASE_URL = "https://rpvtpbuljnceyfdabvhu.supabase.co";
-const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InJwdnRwYnVsam5jZXlmZGFidmh1Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjQ1NjYzMzUsImV4cCI6MjA4MDE0MjMzNX0.__HetGjrnEPWMlNGGRMhxfRwWp1jmfXwI87Rpeww82E";
-
 (() => {
-  /* ---------------- Utilities & toast ---------------- */
+  /* ================== CONFIG — REPLACE THESE ================== */
+  const FLOW_API_KEY = 'varApiKey';
+  const FLOW_CREATE_EVENT_URL = 'https://default0ae51e1907c84e4bbb6d648ee58410.f4.environment.api.powerplatform.com:443/powerautomat…';      // POST: create event (Flow A)
+  const FLOW_GET_EVENTS_URL   = 'PASTE_API_GET_EVENTS_URL';      // GET or POST: returns all Events (Flow GET_EVENTS)
+  const FLOW_SUBSCRIBE_URL    = 'https://default0ae51e1907c84e4bbb6d648ee58410.f4.environment.api.powerplatform.com:443/powerautomat…';       // POST: create subscription (Flow B)
+  const FLOW_GET_SUBS_URL     = 'PASTE_API_GET_SUBS_URL';        // GET/POST: fetch subscriptions for user (Flow GET_SUBS)
+  const FLOW_UNSUBSCRIBE_URL  = 'PASTE_API_UNSUBSCRIBE_URL';     // POST: unsubscribe (Flow Unsubscribe)
+  /* ========================================================== */
+
   const STORAGE_PREFIX = 'enotifier_';
   const LS = {
     key(k){ return STORAGE_PREFIX + k; },
@@ -17,10 +20,11 @@ const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBh
     remove(k){ localStorage.removeItem(this.key(k)); }
   };
 
+  // --- Utilities ---
   const qs = (s, r=document) => r.querySelector(s);
-  const qsa = (s, r=document) => Array.from((r||document).querySelectorAll(s));
+  const qsa = (s, r=document) => Array.from(r.querySelectorAll(s));
+  const uid = () => 'id_' + Date.now() + '_' + Math.floor(Math.random()*9999);
   const escapeHtml = s => String(s||'').replace(/[&<>"']/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
-
   function toast(msg, type='info', t=3500){
     let container = qs('#toasts');
     if(!container){ container = document.createElement('div'); container.id = 'toasts'; document.body.appendChild(container); }
@@ -35,197 +39,161 @@ const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBh
     setTimeout(()=> box.remove(), t);
   }
 
-  /* ---------------- REST helpers ---------------- */
-  async function restRequest(path, method='GET', body=null, params='', extraHeaders={}){
-    const base = SUPABASE_URL.replace(/\/$/,'') + '/rest/v1/' + path;
-    const q = params ? (params.startsWith('?') ? params : '?' + params) : '';
-    const url = base + q;
-    const headers = {
-      'apikey': SUPABASE_ANON_KEY,
-      'Authorization': `Bearer ${SUPABASE_ANON_KEY}`,
-      'Content-Type': 'application/json',
-      ...extraHeaders
-    };
-    const opts = { method, headers, credentials: 'omit' };
-    if(body !== null) opts.body = JSON.stringify(body);
-    const res = await fetch(url, opts);
+  /* ================== REST helpers for Power Automate ================== */
+  async function paPost(url, body){
+    if(!url) throw new Error('Missing Flow URL');
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-api-key': FLOW_API_KEY
+      },
+      body: JSON.stringify(body || {})
+    });
     const ct = res.headers.get('content-type') || '';
-    const data = ct.includes('application/json') ? await res.json() : await res.text();
+    const data = ct.includes('application/json') ? await res.json().catch(()=>null) : await res.text().catch(()=>null);
     if(!res.ok){
       const msg = (data && data.message) ? data.message : (typeof data === 'string' ? data : JSON.stringify(data));
-      const err = new Error(`Supabase REST error ${res.status}: ${msg}`);
-      err.status = res.status; err.body = data; err.url = url; throw err;
+      const err = new Error(`Flow error ${res.status}: ${msg}`);
+      err.status = res.status; err.body = data;
+      throw err;
     }
     return data;
   }
 
-  // write helper that requests returned representation
-  async function restWrite(path, method, payload){
-    const url = `${SUPABASE_URL.replace(/\/$/,'')}/rest/v1/${path}?select=*`;
+  async function paGet(url){
+    if(!url) throw new Error('Missing Flow URL');
     const res = await fetch(url, {
-      method,
+      method: 'GET',
       headers: {
-        'apikey': SUPABASE_ANON_KEY,
-        'Authorization': `Bearer ${SUPABASE_ANON_KEY}`,
         'Content-Type': 'application/json',
-        'Prefer': 'return=representation'
-      },
-      body: JSON.stringify(Array.isArray(payload) ? payload : [payload])
+        'x-api-key': FLOW_API_KEY
+      }
     });
     const ct = res.headers.get('content-type') || '';
-    const data = ct.includes('application/json') ? await res.json() : await res.text();
+    const data = ct.includes('application/json') ? await res.json().catch(()=>null) : await res.text().catch(()=>null);
     if(!res.ok){
       const msg = (data && data.message) ? data.message : (typeof data === 'string' ? data : JSON.stringify(data));
-      const err = new Error(`Supabase REST error ${res.status}: ${msg}`);
-      err.status = res.status; err.body = data; throw err;
+      const err = new Error(`Flow GET error ${res.status}: ${msg}`);
+      err.status = res.status; err.body = data;
+      throw err;
     }
-    return Array.isArray(data) ? data[0] : data;
+    return data;
   }
 
-  /* ---------------- Mapping helpers ---------------- */
+  /* ================== Mapping between Flow responses and UI model ================== */
   function mapRowToUIEvent(r){
+    // r is object from SharePoint/PowerAutomate flow
+    if(!r) return null;
+    // try to support both Title and event_name patterns
+    const title = r.Title || r.event_name || r.Title0 || r.title;
     return {
-      id: String(r.id),
-      ownerId: r.user_id,
-      name: r.event_name || '',
-      description: r.description || '',
-      startDate: r.startdate ? (new Date(r.startdate)).toISOString().slice(0,10) : '',
-      endDate: r.enddate ? (new Date(r.enddate)).toISOString().slice(0,10) : '',
+      id: String(r.ID || r.id || title + '_' + (r.created_at||r.Created || Date.now())),
+      ownerId: r.user_id || r.userId || (r.user_id || null),
+      name: title || '',
+      description: r.description || r.Description || '',
+      startDate: r.startdate ? (new Date(r.startdate)).toISOString().slice(0,10) : (r.startDate || ''),
+      endDate: r.enddate ? (new Date(r.enddate)).toISOString().slice(0,10) : (r.endDate || ''),
       status: r.status || '',
-      tags: r.tags ? (String(r.tags).split(',').map(s=>s.trim()).filter(Boolean)) : [],
-      contactEmail: r.contact_email || '',
-      renewalEnabled: !!r.renewal,
-      createdAt: r.created_at,
-      published: !!r.published,
-      draft: !!r.draft,
+      tags: r.tags ? (Array.isArray(r.tags)? r.tags : String(r.tags).split(',').map(s=>s.trim()).filter(Boolean)) : [],
+      contactEmail: r.contact_email || r.contactEmail || '',
+      renewalEnabled: !!(r.renewal || r.Renewal),
+      createdAt: r.created_at || r.Created || null,
+      published: !!(r.published === true || r.published === 'true' || r.published === 1 || r.published === '1'),
+      draft: !!(r.draft === true || r.draft === 'true' || r.draft === 1 || r.draft === '1'),
       location: r.location || '',
       subscriberIds: Array.isArray(r.subscriber_ids) ? r.subscriber_ids : []
     };
   }
 
-  /* ---------------- API (REST-only) ---------------- */
-  const Api = {
-    async fetchEvents({ onlyUpcoming=false, limit=1000 } = {}){
-      let params = `select=*&order=startdate.asc&limit=${limit}`;
-      if(onlyUpcoming){
-        const today = new Date().toISOString().slice(0,10);
-        params += `&startdate=gte.${encodeURIComponent(today)}`;
-      }
-      const data = await restRequest('Events', 'GET', null, params);
-      return (Array.isArray(data) ? data : []).map(mapRowToUIEvent);
-    },
-
-    async createEvent(payload){
-      return mapRowToUIEvent(await restWrite('Events','POST', payload));
-    },
-
-    async updateEvent(id, payload){
-      const url = `Events?id=eq.${encodeURIComponent(id)}`;
-      const res = await fetch(`${SUPABASE_URL.replace(/\/$/,'')}/rest/v1/${url}?select=*`, {
-        method: 'PATCH',
-        headers: {
-          'apikey': SUPABASE_ANON_KEY,
-          'Authorization': `Bearer ${SUPABASE_ANON_KEY}`,
-          'Content-Type': 'application/json',
-          'Prefer': 'return=representation'
-        },
-        body: JSON.stringify(payload)
-      });
-      const ct = res.headers.get('content-type') || '';
-      const data = ct.includes('application/json') ? await res.json() : await res.text();
-      if(!res.ok){
-        const msg = (data && data.message) ? data.message : (typeof data === 'string' ? data : JSON.stringify(data));
-        throw new Error(`Supabase REST update error ${res.status}: ${msg}`);
-      }
-      const row = Array.isArray(data) ? data[0] : data;
-      return mapRowToUIEvent(row);
-    },
-
-    async deleteEvent(id){
-      const res = await fetch(`${SUPABASE_URL.replace(/\/$/,'')}/rest/v1/Events?id=eq.${encodeURIComponent(id)}`, { method:'DELETE', headers: { 'apikey': SUPABASE_ANON_KEY, 'Authorization': `Bearer ${SUPABASE_ANON_KEY}` } });
-      if(!res.ok){ const txt = await res.text().catch(()=>null); throw new Error('Delete failed: ' + res.status + ' ' + txt); }
-      return true;
-    },
-
-    // subscriptions
-    async fetchSubscriptionsByEventName(eventName){
-      const params = `select=*&event_name=eq.${encodeURIComponent(eventName)}`;
-      const data = await restRequest('subscriptions', 'GET', null, params);
-      return Array.isArray(data) ? data : [];
-    },
-
-    async subscribeByEventName({ event_name, subscriber_email, subscriber_NTID=null, auto_renewal=true }){
-      const payload = { event_name, subscriber_email, subscriber_NTID, auto_renewal, created_at: new Date().toISOString() };
-      return await restWrite('subscriptions','POST', payload);
-    },
-
-    async unsubscribeByEmail(event_name, subscriber_email){
-      const subs = await this.fetchSubscriptionsByEventName(event_name);
-      const toDelete = subs.filter(s => (s.subscriber_email && s.subscriber_email.toLowerCase() === String(subscriber_email||'').toLowerCase()));
-      if(toDelete.length === 0) return [];
-      const ids = toDelete.map(d => d.id);
-      const url = `${SUPABASE_URL.replace(/\/$/,'')}/rest/v1/subscriptions?id=in.(${ids.map(i=>encodeURIComponent(i)).join(',')})`;
-      const res = await fetch(url, { method:'DELETE', headers: { 'apikey': SUPABASE_ANON_KEY, 'Authorization': `Bearer ${SUPABASE_ANON_KEY}` } });
-      if(!res.ok){ const txt = await res.text().catch(()=>null); throw new Error('Unsubscribe failed: ' + res.status + ' ' + txt); }
-      return toDelete;
-    },
-
-    async fetchSubscriptionsForUserNTIDOrEmail(ntid, email){
-      const orCond = `or=(subscriber_NTID.eq.${encodeURIComponent(ntid)},subscriber_email.eq.${encodeURIComponent(email)})&select=*`;
-      const res = await fetch(`${SUPABASE_URL.replace(/\/$/,'')}/rest/v1/subscriptions?${orCond}`, { method:'GET', headers: { 'apikey': SUPABASE_ANON_KEY, 'Authorization': `Bearer ${SUPABASE_ANON_KEY}` } });
-      if(!res.ok){ const txt = await res.text().catch(()=>null); throw new Error('Failed to load subs: ' + res.status + ' ' + txt); }
-      return await res.json();
-    }
-  };
-
-  /* ---------------- Smart error handling (shows SQL if column missing) ---------------- */
-  function handleSupabaseError(err){
-    console.error('Supabase error:', err);
-    toast('Server error: ' + (err.message || 'See console'), 'error', 6000);
-
-    if(err && err.message && typeof err.message === 'string'){
-      const m = err.message.match(/Could not find the '([^']+)' column of '([^']+)'/i);
-      if(m){
-        const col = m[1];
-        const table = m[2];
-        const suggestion = `ALTER TABLE public."${table}" ADD COLUMN IF NOT EXISTS ${col} text;`;
-        showFixModal(col, table, suggestion);
-      }
-    }
-  }
-
-  function showFixModal(col, table, sql){
-    let overlay = qs('#schema-fix-overlay');
-    if(!overlay){
-      overlay = document.createElement('div'); overlay.id = 'schema-fix-overlay';
-      Object.assign(overlay.style, {position:'fixed', left:'12px', right:'12px', bottom:'12px', zIndex:99999, background:'#111', color:'#fff', padding:'16px', borderRadius:'8px', boxShadow:'0 8px 30px rgba(0,0,0,0.6)'});
-      document.body.appendChild(overlay);
-    }
-    overlay.innerHTML = `<strong>Database schema issue detected</strong>
-      <div style="margin-top:8px">Missing column <code style="background:#222;padding:3px 6px;border-radius:4px">${escapeHtml(col)}</code> on table <code style="background:#222;padding:3px 6px;border-radius:4px">${escapeHtml(table)}</code>.</div>
-      <div style="margin-top:8px">Run this SQL in Supabase → SQL editor to add the column:</div>
-      <pre style="background:#0b1220;color:#bfe6b4;padding:8px;border-radius:6px;margin-top:8px;overflow:auto">${escapeHtml(sql)}</pre>
-      <div style="margin-top:8px"><button id="schema-fix-close" style="padding:8px 12px;border-radius:6px;background:#2bb673;border:0;color:#fff;font-weight:700">Close</button></div>`;
-    qs('#schema-fix-close').addEventListener('click', ()=> overlay.remove());
-  }
-
-  /* ---------------- App state + UI wiring ---------------- */
-  let EVENTS_CACHE = [];
-  let SUBS_CACHE = [];
-  let currentUser = null;
+  /* ================== In-memory caches (server-driven) ================== */
+  let EVENTS_CACHE = []; // array of mapped UI events
+  let SUBS_CACHE = [];   // raw subscription rows
 
   function getEvents(){ return EVENTS_CACHE; }
-  function saveEvents(arr){ EVENTS_CACHE = Array.isArray(arr)?arr:[]; }
+  function saveEvents(arr){ EVENTS_CACHE = Array.isArray(arr) ? arr : []; }
+  function getSubs(){ return SUBS_CACHE; }
+  function saveSubs(arr){ SUBS_CACHE = Array.isArray(arr) ? arr : []; }
 
+  /* ================== Power Automate API wrappers ================== */
+
+  // Create event (Flow A) - payload must match your Flow A schema
+  async function apiCreateEvent(payload){
+    // payload should contain: user_id, event_name (Title), description, startdate, enddate, contact_email, tags, renewal, published, draft, location, visibility, created_at, plus sent_reminder_* flags
+    const res = await paPost(FLOW_CREATE_EVENT_URL, payload);
+    // Flow returns created item representation; convert to UI event
+    // Support returning { success:true, id:..., title:... } OR full item JSON
+    if(Array.isArray(res) && res.length) return mapRowToUIEvent(res[0]);
+    if(res && res.ID) return mapRowToUIEvent(res);
+    return mapRowToUIEvent(res);
+  }
+
+  // Get events - expects flow to return array of rows
+  async function apiGetEvents(){
+    // Some flows are GET, some are POST. We try GET first, fallback to POST without body.
+    if(!FLOW_GET_EVENTS_URL) throw new Error('FLOW_GET_EVENTS_URL not configured');
+    try {
+      const rows = await paGet(FLOW_GET_EVENTS_URL);
+      if(!Array.isArray(rows)) return (Array.isArray(rows.value) ? rows.value.map(mapRowToUIEvent) : []);
+      return rows.map(mapRowToUIEvent);
+    } catch(err){
+      // fallback: try POST without body (some flows require POST)
+      const rows = await paPost(FLOW_GET_EVENTS_URL, {});
+      if(Array.isArray(rows)) return rows.map(mapRowToUIEvent);
+      if(Array.isArray(rows.value)) return rows.value.map(mapRowToUIEvent);
+      return [];
+    }
+  }
+
+  // Subscribe (Flow B) - returns created subscription
+  async function apiSubscribe({ event_name, subscriber_email, subscriber_NTID=null, auto_renewal=true }){
+    if(!FLOW_SUBSCRIBE_URL) throw new Error('FLOW_SUBSCRIBE_URL not configured');
+    const payload = { event_name, subscriber_email, subscriber_NTID, auto_renewal };
+    const res = await paPost(FLOW_SUBSCRIBE_URL, payload);
+    return res;
+  }
+
+  // Get subscriptions for current user
+  async function apiGetSubscriptionsForUser(ntid, email){
+    if(!FLOW_GET_SUBS_URL) throw new Error('FLOW_GET_SUBS_URL not configured');
+    // many GET flows accept query params or require POST body; we'll attempt POST body with ntid/email
+    try {
+      const rows = await paPost(FLOW_GET_SUBS_URL, { ntid, email });
+      if(Array.isArray(rows)) return rows;
+      if(Array.isArray(rows.value)) return rows.value;
+      return [];
+    } catch(err){
+      // as fallback, try paGet
+      try {
+        const rows = await paGet(FLOW_GET_SUBS_URL);
+        if(Array.isArray(rows)) return rows;
+        if(Array.isArray(rows.value)) return rows.value;
+      } catch(e){}
+      return [];
+    }
+  }
+
+  // Unsubscribe (Flow Unsubscribe) - receives { event_name, subscriber_email } and deletes items
+  async function apiUnsubscribe(event_name, subscriber_email){
+    if(!FLOW_UNSUBSCRIBE_URL) throw new Error('FLOW_UNSUBSCRIBE_URL not configured');
+    const res = await paPost(FLOW_UNSUBSCRIBE_URL, { event_name, subscriber_email });
+    return res;
+  }
+
+  /* ================== Refresh caches (called from UI) ================== */
   async function refreshEvents(){
     try {
-      const rows = await Api.fetchEvents({ onlyUpcoming:false, limit:1000 });
-      EVENTS_CACHE = rows;
+      const rows = await apiGetEvents();
+      EVENTS_CACHE = Array.isArray(rows) ? rows : [];
+      // compute statuses
+      EVENTS_CACHE.forEach(e => { e.status = computeStatus(e); });
+      saveEvents(EVENTS_CACHE); // also save to LS for offline fallback (optional)
       return EVENTS_CACHE;
-    } catch(e){
-      handleSupabaseError(e);
-      EVENTS_CACHE = [];
-      throw e;
+    } catch(err){
+      console.error('refreshEvents error', err);
+      // fallback: if we have LS cached events keep them
+      try { EVENTS_CACHE = (LS.get('events') || []).map(mapRowToUIEvent); return EVENTS_CACHE; } catch(e){}
+      EVENTS_CACHE = []; return EVENTS_CACHE;
     }
   }
 
@@ -234,29 +202,20 @@ const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBh
     try {
       const ntid = currentUserParam.id || '';
       const email = currentUserParam.email || '';
-      const rows = await Api.fetchSubscriptionsForUserNTIDOrEmail(ntid, email);
-      SUBS_CACHE = rows;
+      const rows = await apiGetSubscriptionsForUser(ntid, email);
+      SUBS_CACHE = Array.isArray(rows) ? rows : [];
+      saveSubs(SUBS_CACHE); // persist locally for UI fallback
       return SUBS_CACHE;
-    } catch(e){
-      handleSupabaseError(e);
-      SUBS_CACHE = [];
-      return [];
+    } catch(err){
+      console.error('refreshSubsForUser error', err);
+      try { SUBS_CACHE = LS.get('subscriptions') || []; return SUBS_CACHE; } catch(e){}
+      SUBS_CACHE = []; return SUBS_CACHE;
     }
   }
 
-  // --- UI logic (kept consistent with your previous app) ---
+  /* ================== UI logic (preserves your original flow and selectors) ================== */
 
-  function todayISO(){ return (new Date()).toISOString().slice(0,10); }
-  function computeStatus(ev){
-    const now = new Date();
-    const start = ev.startDate ? new Date(ev.startDate + 'T00:00:00') : null;
-    const end = ev.endDate ? new Date(ev.endDate + 'T00:00:00') : null;
-    if(end && end < new Date(now.getFullYear(), now.getMonth(), now.getDate())) return 'expired';
-    if(start && end && start <= now && now <= new Date(end.getFullYear(), end.getMonth(), end.getDate()+1)) return 'ongoing';
-    if(start && start <= now && (!end || end >= now)) return 'ongoing';
-    return 'upcoming';
-  }
-
+  // Dashboard counts & owner events rendering (uses caches)
   function renderDashboardCounts(){
     const events = getEvents();
     const myEvents = currentUser ? events.filter(e => e.ownerId === currentUser.id) : [];
@@ -299,7 +258,6 @@ const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBh
     if(!container) return;
     const all = getEvents();
     all.forEach(e => { e.status = computeStatus(e); });
-
     const events = currentUser ? all.filter(e => e.ownerId === currentUser.id) : [];
     const active = events.filter(e => !e.draft && e.published && e.status !== 'expired');
     const drafts = events.filter(e => e.draft || (!e.published && !e.draft));
@@ -341,18 +299,13 @@ const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBh
 
   async function handleDeleteEvent(id){
     if(!confirm('Delete this event?')) return;
-    try {
-      await Api.deleteEvent(id);
-      await refreshEvents();
-      toast('Event deleted', 'success');
-      renderOwnerEventsTabs();
-      reloadBrowse(true);
-      renderDashboardCounts();
-      await refreshSubsForUser(currentUser);
-    } catch(err){
-      console.error(err);
-      toast('Delete failed: ' + (err.message||err), 'error');
-    }
+    // TODO: implement API delete flow when available. For now we remove from cache and request a re-fetch.
+    EVENTS_CACHE = EVENTS_CACHE.filter(e => String(e.id) !== String(id));
+    saveEvents(EVENTS_CACHE);
+    toast('Event removed locally. (Implement server delete flow to remove from SharePoint)', 'info');
+    renderOwnerEventsTabs();
+    reloadBrowse(true);
+    await refreshSubsForUser(currentUser);
   }
 
   function handleEditEvent(id){
@@ -375,24 +328,22 @@ const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBh
   }
 
   async function handleTogglePublish(id){
-    const events = getEvents();
-    const idx = events.findIndex(e => String(e.id) === String(id) && e.ownerId === currentUser.id);
+    // This toggles locally and suggests sending an update to server when update flow exists
+    const idx = EVENTS_CACHE.findIndex(e => String(e.id) === String(id) && e.ownerId === currentUser.id);
     if(idx === -1) { toast('Not found or unauthorized', 'error'); return; }
-    const newPublished = !events[idx].published;
-    try {
-      const dbPayload = { published: newPublished, draft: !newPublished, status: newPublished ? 'upcoming' : 'draft' };
-      await Api.updateEvent(id, dbPayload);
-      await refreshEvents();
-      toast(newPublished ? 'Published' : 'Unpublished', 'success');
-      renderOwnerEventsTabs();
-      reloadBrowse(true);
-      renderDashboardCounts();
-    } catch(err){
-      console.error(err);
-      toast('Publish toggle failed: ' + (err.message||err), 'error');
-    }
+    EVENTS_CACHE[idx].published = !EVENTS_CACHE[idx].published;
+    EVENTS_CACHE[idx].draft = !EVENTS_CACHE[idx].published;
+    EVENTS_CACHE[idx].status = computeStatus(EVENTS_CACHE[idx]);
+    if(EVENTS_CACHE[idx].published) EVENTS_CACHE[idx]._lastPublishedAt = new Date().toISOString();
+    saveEvents(EVENTS_CACHE);
+    toast(EVENTS_CACHE[idx].published ? 'Published' : 'Unpublished', 'success');
+    renderOwnerEventsTabs();
+    reloadBrowse(true);
+    renderDashboardCounts();
+    // TODO: if you create API_UpdateEvent, call it here to persist publish toggle to SharePoint
   }
 
+  /* ================== Create form (calls apiCreateEvent) ================== */
   function initCreateEventForm(){
     const form = qs('#create-event-form');
     if(!form) return;
@@ -423,37 +374,39 @@ const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBh
       return { ok:true, field:null };
     }
 
-    saveDraftBtn && saveDraftBtn.addEventListener('click', async (ev) => {
+    saveDraftBtn.addEventListener('click', async (ev) => {
       ev.preventDefault();
       if(!currentUser){ toast('Please login to save drafts','error'); return; }
       const payload = gatherFormData();
       const editing = sessionStorage.getItem('editing_event');
-      try {
-        const dbPayload = {
-          user_id: currentUser.id,
-          event_name: payload.name,
-          description: payload.description || null,
-          startdate: payload.startDate || null,
-          enddate: payload.endDate || null,
-          contact_email: payload.contactEmail,
-          tags: payload.tags.join ? payload.tags.join(',') : payload.tags,
-          renewal: !!payload.renewalEnabled,
-          status: 'draft',
-          published: false,
-          draft: true,
-          location: payload.location || null,
-          created_at: new Date().toISOString()
-        };
+      // Build DB payload for Flow A (match your Flow schema)
+      const dbPayload = {
+        user_id: currentUser.id,
+        event_name: payload.name,
+        description: payload.description || null,
+        startdate: payload.startDate || null,
+        enddate: payload.endDate || null,
+        contact_email: payload.contactEmail,
+        tags: payload.tags.join ? payload.tags.join(',') : payload.tags,
+        renewal: !!payload.renewalEnabled,
+        status: 'draft',
+        published: false,
+        draft: true,
+        location: payload.location || null,
+        visibility: payload.visibility || 'private',
+        created_at: new Date().toISOString(),
+        sent_reminder_7: false,
+        sent_reminder_3: false,
+        sent_reminder_1: false,
+        sent_reminder_0: false,
+        sent_notifications: false
+      };
 
-        if(editing){
-          await Api.updateEvent(editing, dbPayload);
-          sessionStorage.removeItem('editing_event');
-          toast('Draft updated (saved to server)', 'success');
-        } else {
-          await Api.createEvent(dbPayload);
-          toast('Draft saved (server)', 'success');
-        }
-        await refreshEvents();
+      try {
+        await apiCreateEvent(dbPayload);
+        toast('Draft saved to server', 'success');
+        // refresh cache
+        try { await refreshEvents(); } catch(e){ console.warn('refreshEvents after saveDraft:', e); }
         renderOwnerEventsTabs();
         renderDashboardCounts();
         reloadBrowse(true);
@@ -462,7 +415,8 @@ const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBh
         form.reset();
         qs('#contact-email').value = `${currentUser.ntid}@Bosch.in`;
       } catch(err){
-        handleSupabaseError(err);
+        console.error(err);
+        toast('Save draft failed: ' + (err.message||err), 'error');
       }
     });
 
@@ -473,40 +427,41 @@ const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBh
       if(!currentUser){ toast('Please login to publish', 'error'); return; }
 
       const payload = gatherFormData();
-      const editing = sessionStorage.getItem('editing_event');
-      try {
-        const dbPayload = {
-          user_id: currentUser.id,
-          event_name: payload.name,
-          description: payload.description || null,
-          startdate: payload.startDate || null,
-          enddate: payload.endDate || null,
-          contact_email: payload.contactEmail,
-          tags: payload.tags.join ? payload.tags.join(',') : payload.tags,
-          renewal: !!payload.renewalEnabled,
-          status: 'upcoming',
-          published: true,
-          draft: false,
-          location: payload.location || null,
-          created_at: new Date().toISOString()
-        };
+      // Build DB payload for publish
+      const dbPayload = {
+        user_id: currentUser.id,
+        event_name: payload.name,
+        description: payload.description || null,
+        startdate: payload.startDate || null,
+        enddate: payload.endDate || null,
+        contact_email: payload.contactEmail,
+        tags: payload.tags.join ? payload.tags.join(',') : payload.tags,
+        renewal: !!payload.renewalEnabled,
+        status: 'upcoming',
+        published: true,
+        draft: false,
+        location: payload.location || null,
+        visibility: payload.visibility || 'private',
+        created_at: new Date().toISOString(),
+        sent_reminder_7: false,
+        sent_reminder_3: false,
+        sent_reminder_1: false,
+        sent_reminder_0: false,
+        sent_notifications: false
+      };
 
-        if(editing){
-          await Api.updateEvent(editing, dbPayload);
-          sessionStorage.removeItem('editing_event');
-          toast('Event updated & published', 'success');
-        } else {
-          await Api.createEvent(dbPayload);
-          toast('Event published', 'success');
-        }
-        await refreshEvents();
+      try {
+        await apiCreateEvent(dbPayload);
+        toast('Event published', 'success');
+        try { await refreshEvents(); } catch(e){ console.warn('refreshEvents after publish:', e); }
         renderOwnerEventsTabs();
         renderDashboardCounts();
         reloadBrowse(true);
         form.reset();
         qs('#contact-email').value = `${currentUser.ntid}@Bosch.in`;
       } catch(err){
-        handleSupabaseError(err);
+        console.error(err);
+        toast('Publish failed: ' + (err.message||err), 'error');
       }
     });
   }
@@ -525,7 +480,7 @@ const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBh
     };
   }
 
-  // Browse & subscribe logic
+  /* ================== Browse & subscribe logic ================== */
   let browsePage = 1;
   const pageSize = 6;
   const loadMoreSize = 5;
@@ -538,7 +493,8 @@ const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBh
     const dateFrom = qs('#dateFrom') ? qs('#dateFrom').value : '';
     const dateTo = qs('#dateTo') ? qs('#dateTo').value : '';
 
-    try { await refreshEvents(); } catch(e){ console.warn('reloadBrowse: refreshEvents failed', e); }
+    // ensure fresh events
+    try { await refreshEvents(); } catch(e){ /* ignore: will render cached */ }
 
     let items = getEvents().filter(e => e.published && !e.draft);
     if(q) items = items.filter(e => (e.name + ' ' + e.description + ' ' + (e.tags||[]).join(' ')).toLowerCase().includes(q));
@@ -564,73 +520,63 @@ const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBh
     items.forEach(ev => {
       const card = document.createElement('article');
       card.className = 'event-card';
+      const subscribed = isSubscribed(ev.id);
       card.innerHTML = `
         <h3 class="event-title">${escapeHtml(ev.name)}</h3>
         <div class="event-date">${escapeHtml(ev.startDate || '-')}</div>
         <div class="event-desc">${escapeHtml(ev.description || '')}</div>
         <div class="event-meta">${(ev.tags||[]).map(t => `<span class="tag">${escapeHtml(t)}</span>`).join('')}</div>
         <div class="event-actions">
-          <button class="subscribe-btn" data-id="${ev.id}">${'Subscribe'}</button>
+          <button class="subscribe-btn ${subscribed ? 'subscribed' : ''}" data-id="${ev.id}">${subscribed ? 'Subscribed' : 'Subscribe'}</button>
         </div>
       `;
       grid.appendChild(card);
     });
   }
 
-  async function isSubscribed(eventId){
-    const ev = getEvents().find(e => String(e.id) === String(eventId));
-    if(!ev) return false;
-    const subs = SUBS_CACHE.filter(s => s.event_name === ev.name);
-    if(subs.length === 0 && currentUser){
-      await refreshSubsForUser(currentUser);
-    }
-    return (SUBS_CACHE || []).some(s => s.event_name === ev.name && (s.subscriber_NTID === currentUser.id || (s.subscriber_email && s.subscriber_email.toLowerCase() === currentUser.email.toLowerCase())));
+  function isSubscribed(eventId){
+    if(!currentUser) return false;
+    // check cached subs
+    return (SUBS_CACHE || []).some(s => s.event_name && s.event_name === (getEvents().find(e => String(e.id) === String(eventId))||{}).name && (s.subscriber_NTID === currentUser.id || (s.subscriber_email && s.subscriber_email.toLowerCase() === currentUser.email.toLowerCase())));
   }
 
   async function toggleSubscribe(eventId){
-    if(!currentUser){
-      const email = prompt('Enter your email to subscribe');
+    const ev = getEvents().find(e => String(e.id) === String(eventId));
+    if(!ev) return toast('Event not found', 'error');
+    // determine user/email
+    let email = null; let ntid = null;
+    if(currentUser){ email = currentUser.email; ntid = currentUser.id; }
+    else {
+      email = prompt('Enter your email to subscribe');
       if(!email) return toast('Email required', 'error');
-      const ev = getEvents().find(e => e.id === eventId);
-      if(!ev) return toast('Event not found', 'error');
-      try {
-        const existing = await Api.fetchSubscriptionsByEventName(ev.name);
-        const already = existing.some(s => s.subscriber_email && s.subscriber_email.toLowerCase() === email.toLowerCase());
-        if(already){
-          await Api.unsubscribeByEmail(ev.name, email);
-          toast('Unsubscribed', 'info');
-        } else {
-          await Api.subscribeByEventName({ event_name: ev.name, subscriber_email: email, subscriber_NTID: null });
-          toast('Subscribed (by email)', 'success');
-        }
-      } catch(err){
-        handleSupabaseError(err);
-      }
-    } else {
-      const ev = getEvents().find(e => String(e.id) === String(eventId));
-      if(!ev) return toast('Event not found', 'error');
-      try {
-        const existing = await Api.fetchSubscriptionsByEventName(ev.name);
-        const already = existing.some(s => s.subscriber_NTID === currentUser.id || (s.subscriber_email && s.subscriber_email.toLowerCase() === currentUser.email.toLowerCase()));
-        if(already){
-          await Api.unsubscribeByEmail(ev.name, currentUser.email);
-          toast('Unsubscribed', 'info');
-        } else {
-          await Api.subscribeByEventName({ event_name: ev.name, subscriber_email: currentUser.email, subscriber_NTID: currentUser.id });
-          toast('Subscribed', 'success');
-        }
-      } catch(err){
-        handleSupabaseError(err);
-      }
     }
 
-    await refreshEvents();
-    await refreshSubsForUser(currentUser);
-    renderOwnerEventsTabs();
-    loadMySubscriptions();
-    reloadBrowse(true);
+    // check existing subscription for this event
+    await refreshSubsForUser(currentUser); // ensure up-to-date
+    const existing = SUBS_CACHE.filter(s => s.event_name === ev.name);
+    const already = existing.some(s => (s.subscriber_NTID && s.subscriber_NTID === ntid) || (s.subscriber_email && s.subscriber_email.toLowerCase() === email.toLowerCase()));
+    try {
+      if(already){
+        // call unsubscribe flow
+        await apiUnsubscribe(ev.name, email);
+        toast('Unsubscribed', 'info');
+      } else {
+        await apiSubscribe({ event_name: ev.name, subscriber_email: email, subscriber_NTID: ntid, auto_renewal: false });
+        toast('Subscribed — confirmation email will arrive shortly', 'success');
+      }
+      // refresh caches & UI
+      await refreshSubsForUser(currentUser);
+      await refreshEvents();
+      renderOwnerEventsTabs();
+      loadMySubscriptions();
+      reloadBrowse(true);
+    } catch(err){
+      console.error(err);
+      toast('Subscribe/Unsubscribe failed: ' + (err.message||err), 'error');
+    }
   }
 
+  /* ================== My subscriptions UI ================== */
   async function loadMySubscriptions(){
     const container = qs('#subscription-list');
     if(!container) return;
@@ -656,22 +602,23 @@ const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBh
         const eventName = b.dataset.eventname;
         const subscriber = b.dataset.subscriber;
         try {
-          await Api.unsubscribeByEmail(eventName, currentUser.email || subscriber);
+          await apiUnsubscribe(eventName, currentUser.email || subscriber);
           toast('Unsubscribed', 'info');
           await refreshSubsForUser(currentUser);
           await refreshEvents();
           renderOwnerEventsTabs(); renderDashboardCounts();
         } catch(err){
-          handleSupabaseError(err);
+          console.error(err);
+          toast('Unable to unsubscribe: ' + (err.message||err), 'error');
         }
       }));
     } catch(err){
-      handleSupabaseError(err);
+      console.error(err);
       container.innerHTML = '<div class="empty-state">Unable to load subscriptions</div>';
     }
   }
 
-  // nav, tabs, login
+  /* ================== Navigation, tabs, login (same UX) ================== */
   function wireNav(){
     qsa('.nav-links a').forEach(a => a.addEventListener('click', (e) => { e.preventDefault(); showSection(a.dataset.target); }));
     qsa('.create-btn').forEach(b => b.addEventListener('click', ()=> showSection('create-event')));
@@ -715,62 +662,8 @@ const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBh
     }));
   }
 
-  function loginWithNTID(ntid, remember=false){
-    if(!ntid) { toast('Enter NTID', 'error'); return; }
-    let users = LS.get('users') || [];
-    let user = users.find(u => u.ntid.toLowerCase() === ntid.toLowerCase());
-    if(!user){
-      user = { id: 'u_' + ntid.toLowerCase(), ntid, displayName: ntid, email: `${ntid}@Bosch.in` };
-      users.push(user); LS.set('users', users);
-    }
-    setSession({ id: user.id, ntid: user.ntid, email: user.email, displayName: user.displayName });
-    if(remember) localStorage.setItem(LS.key('remember_ntid'), user.ntid);
-
-    const lp = document.getElementById('login-page'); const mw = document.getElementById('main-website');
-    if(lp) lp.style.display='none';
-    if(mw) mw.style.display='block';
-    document.body.classList.remove('login-active');
-    qs('#user-greeting').textContent = user.ntid;
-    qs('#contact-email').value = `${user.ntid}@Bosch.in`;
-    showSection('dashboard');
-
-    (async () => {
-      try { await refreshEvents(); } catch(e){ console.warn('refreshEvents on login:', e); }
-      try { await refreshSubsForUser(currentUser); } catch(e){ console.warn('refreshSubsForUser on login:', e); }
-      renderDashboardCounts(); renderOwnerEventsTabs(); initCreateEventForm(); initOwnerEventsDelegation(); wireMyEventTabs(); loadMySubscriptions(); reloadBrowse(true);
-    })();
-
-    toast(`Welcome ${user.ntid}`, 'success', 1600);
-  }
-
-  function logoutFlow(){
-    clearSession();
-    const lp = document.getElementById('login-page'); const mw = document.getElementById('main-website');
-    if(lp) lp.style.display='flex';
-    if(mw) mw.style.display='none';
-    document.body.classList.add('login-active');
-  }
-
-  function initBrowseHandlers(){
-    const s = qs('#searchInput'); if(s) s.addEventListener('input', debounce(()=> reloadBrowse(true), 300));
-    const cat = qs('#categoryFilter'); if(cat) cat.addEventListener('change', ()=> reloadBrowse(true));
-    const st = qs('#statusFilter'); if(st) st.addEventListener('change', ()=> reloadBrowse(true));
-    const df = qs('#dateFrom'); if(df) df.addEventListener('change', ()=> reloadBrowse(true));
-    const dt = qs('#dateTo'); if(dt) dt.addEventListener('change', ()=> reloadBrowse(true));
-    const clear = qs('#clearFilters'); if(clear) clear.addEventListener('click', ()=> { if(qs('#searchInput')) qs('#searchInput').value=''; if(qs('#categoryFilter')) qs('#categoryFilter').value='all'; if(qs('#statusFilter')) qs('#statusFilter').value='all'; if(qs('#dateFrom')) qs('#dateFrom').value=''; if(qs('#dateTo')) qs('#dateTo').value=''; reloadBrowse(true); });
-    const loadMore = qs('#loadMore'); if(loadMore) loadMore.addEventListener('click', ()=> { browsePage++; reloadBrowse(false); });
-    const grid = qs('#events-grid'); if(grid) grid.addEventListener('click', (e) => {
-      const btn = e.target.closest('.subscribe-btn'); if(!btn) return;
-      (async () => {
-        await toggleSubscribe(btn.dataset.id);
-        const isSub = await isSubscribed(btn.dataset.id);
-        btn.classList.toggle('subscribed', isSub);
-        btn.textContent = isSub ? 'Subscribed' : 'Subscribe';
-      })();
-    });
-  }
-  function debounce(fn, t=200){ let to=null; return (...a)=>{ clearTimeout(to); to=setTimeout(()=>fn(...a), t); }; }
-
+  // --- Login flow (keeps your local NTID logic) ---
+  let currentUser = null;
   function setSession(u){ LS.set('session', u); currentUser = u; }
   function clearSession(){ LS.remove('session'); localStorage.removeItem(LS.key('remember_ntid')); currentUser = null; }
   function loadSession(){
@@ -783,28 +676,88 @@ const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBh
     }
   }
 
-  async function boot(){
+  function loginWithNTID(ntid, remember=false){
+    if(!ntid) { toast('Enter NTID', 'error'); return; }
+    let users = LS.get('users') || [];
+    let user = users.find(u => u.ntid.toLowerCase() === ntid.toLowerCase());
+    if(!user){
+      user = { id: 'u_' + ntid.toLowerCase(), ntid, displayName: ntid, email: `${ntid}@Bosch.in` };
+      users.push(user); LS.set('users', users);
+    }
+    setSession({ id: user.id, ntid: user.ntid, email: user.email, displayName: user.displayName });
+    if(remember) localStorage.setItem(LS.key('remember_ntid'), user.ntid);
+
+    const lp = document.getElementById('login-page'); const mw = document.getElementById('main-website');
+    if(lp) lp.style.display='none'; if(mw) mw.style.display='block'; document.body.classList.remove('login-active');
+    qs('#user-greeting').textContent = user.ntid;
+    qs('#contact-email').value = `${user.ntid}@Bosch.in`;
+    showSection('dashboard');
+    window.scrollTo({ top: 0, behavior: 'instant' });
+
+    // initialize data from server
+    (async () => {
+      try { await refreshEvents(); } catch(e){ console.warn('refreshEvents login:', e); }
+      try { await refreshSubsForUser(currentUser); } catch(e){ console.warn('refreshSubsForUser login:', e); }
+      renderDashboardCounts(); renderOwnerEventsTabs(); initCreateEventForm(); initOwnerEventsDelegation(); wireMyEventTabs(); loadMySubscriptions(); reloadBrowse(true);
+    })();
+
+    toast(`Welcome ${user.ntid}`, 'success', 1600);
+  }
+
+  function logoutFlow(){
+    clearSession();
+    const lp = document.getElementById('login-page'); const mw = document.getElementById('main-website');
+    if(lp) lp.style.display='flex'; if(mw) mw.style.display='none';
+    document.body.classList.add('login-active');
+  }
+
+  /* ================== Boot / wiring ================== */
+  function seedIfEmpty(){
     if(!LS.get('users')) LS.set('users', [{ id:'u_demo', ntid:'demo', displayName:'demo', email:'demo@Bosch.in' }]);
+  }
+
+  function initBrowseHandlers(){
+    const s = qs('#searchInput'); if(s) s.addEventListener('input', debounce(()=> reloadBrowse(true), 300));
+    const cat = qs('#categoryFilter'); if(cat) cat.addEventListener('change', ()=> reloadBrowse(true));
+    const st = qs('#statusFilter'); if(st) st.addEventListener('change', ()=> reloadBrowse(true));
+    const df = qs('#dateFrom'); if(df) df.addEventListener('change', ()=> reloadBrowse(true));
+    const dt = qs('#dateTo'); if(dt) dt.addEventListener('change', ()=> reloadBrowse(true));
+    const clear = qs('#clearFilters'); if(clear) clear.addEventListener('click', ()=> { if(qs('#searchInput')) qs('#searchInput').value=''; if(qs('#categoryFilter')) qs('#categoryFilter').value='all'; if(qs('#statusFilter')) qs('#statusFilter').value='all'; if(qs('#dateFrom')) qs('#dateFrom').value=''; if(qs('#dateTo')) qs('#dateTo').value=''; reloadBrowse(true); });
+    const loadMore = qs('#loadMore'); if(loadMore) loadMore.addEventListener('click', ()=> { browsePage++; reloadBrowse(false); });
+    const grid = qs('#events-grid'); if(grid) grid.addEventListener('click', (e) => {
+      const btn = e.target.closest('.subscribe-btn'); if(!btn) return;
+      (async ()=> {
+        await toggleSubscribe(btn.dataset.id);
+        const sub = isSubscribed(btn.dataset.id);
+        btn.classList.toggle('subscribed', sub);
+        btn.textContent = sub ? 'Subscribed' : 'Subscribe';
+      })();
+    });
+  }
+  function debounce(fn, t=200){ let to=null; return (...a)=>{ clearTimeout(to); to=setTimeout(()=>fn(...a), t); }; }
+
+  async function boot(){
+    seedIfEmpty();
     loadSession();
 
-    if(currentUser){
-      try { await refreshEvents(); } catch(e){ console.warn('initial refreshEvents', e); }
-      try { await refreshSubsForUser(currentUser); } catch(e){ console.warn('initial refreshSubsForUser', e); }
+    // if remembered NTID -> auto login
+    const rem = localStorage.getItem(LS.key('remember_ntid'));
+    if(rem && !currentUser) { loginWithNTID(rem, true); return; }
 
+    if(currentUser){
       const lp = document.getElementById('login-page'); const mw = document.getElementById('main-website');
-      if(lp) lp.style.display='none';
-      if(mw) mw.style.display='block';
-      document.body.classList.remove('login-active');
+      if(lp) lp.style.display='none'; if(mw) mw.style.display='block'; document.body.classList.remove('login-active');
       qs('#user-greeting').textContent = currentUser.ntid;
       qs('#contact-email').value = `${currentUser.ntid}@Bosch.in`;
+      try { await refreshEvents(); } catch(e){ console.warn('initial refreshEvents', e); }
+      try { await refreshSubsForUser(currentUser); } catch(e){ console.warn('initial refreshSubsForUser', e); }
       renderDashboardCounts(); renderOwnerEventsTabs(); initCreateEventForm(); initOwnerEventsDelegation(); wireMyEventTabs(); loadMySubscriptions(); reloadBrowse(true);
     } else {
       const lp = document.getElementById('login-page'); const mw = document.getElementById('main-website');
-      if(lp) lp.style.display='flex';
-      if(mw) mw.style.display='none';
-      document.body.classList.add('login-active');
+      if(lp) lp.style.display='flex'; if(mw) mw.style.display='none'; document.body.classList.add('login-active');
     }
 
+    // login button
     const loginBtn = qs('#login-btn');
     if(loginBtn) loginBtn.addEventListener('click', (e)=> { e.preventDefault(); const ntid = qs('#ntid').value.trim(); const remember = !!qs('#remember').checked; if(!ntid) return toast('Please enter NTID', 'error'); loginWithNTID(ntid, remember); });
 
@@ -815,7 +768,7 @@ const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBh
     wireMyEventTabs();
   }
 
-  // view-all header routing
+  // route view-all header links
   qsa('.panel-header .view-all').forEach(v => {
     v.addEventListener('click', e => {
       e.preventDefault();
@@ -829,11 +782,7 @@ const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBh
   const pd = qs('#profile-dropdown');
   const pb = qs('#profile-btn');
   if(pb) {
-    pb.addEventListener('click', (e)=>{
-      e.stopPropagation();
-      pd && pd.classList.toggle('hidden');
-      if(currentUser) qs('#pd-ntid').textContent = currentUser.ntid + "@Bosch.com";
-    });
+    pb.addEventListener('click', (e)=>{ e.stopPropagation(); pd && pd.classList.toggle('hidden'); if(currentUser) qs('#pd-ntid').textContent = currentUser.ntid + "@Bosch.com"; });
   }
   document.addEventListener('click', ()=> pd && pd.classList.add('hidden') );
 
@@ -846,6 +795,9 @@ const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBh
   document.addEventListener('DOMContentLoaded', () => { boot().catch(e => console.error('boot error', e)); });
 
   // debug helpers
-  window.EN = { refreshEvents, refreshSubsForUser, getEvents, Api };
+  window.EN = {
+    apiCreateEvent, apiGetEvents, apiSubscribe, apiGetSubscriptionsForUser, apiUnsubscribe,
+    refreshEvents, refreshSubsForUser, getEvents, getSubs
+  };
 
 })(); // IIFE end
