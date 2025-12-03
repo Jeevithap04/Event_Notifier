@@ -4,7 +4,7 @@
 
 (() => {
   /* ================== CONFIG — REPLACE THESE ================== */
-  const FLOW_API_KEY = 'varApiKey';
+  const FLOW_API_KEY = 'BOSCH_Eventnotifier2025';
   const FLOW_CREATE_EVENT_URL = 'https://default0ae51e1907c84e4bbb6d648ee58410.f4.environment.api.powerplatform.com:443/powerautomat…';      // POST: create event (Flow A)
   const FLOW_GET_EVENTS_URL   = 'https://default0ae51e1907c84e4bbb6d648ee58410.f4.environment.api.powerplatform.com:443/powerautomate/automations/direct/workflows/a50a4bdf221c4e4697e6e632cf33c117/triggers/manual/paths/invoke?api-version=1';      // GET or POST: returns all Events (Flow GET_EVENTS)
   const FLOW_SUBSCRIBE_URL    = 'https://default0ae51e1907c84e4bbb6d648ee58410.f4.environment.api.powerplatform.com:443/powerautomat…';       // POST: create subscription (Flow B)
@@ -801,4 +801,5 @@
   };
 
 })(); // IIFE end
+
 
